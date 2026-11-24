@@ -247,3 +247,12 @@ test('unknown galleries show a friendly not-found page', async () => {
   assert.equal(res.status, 404);
   assert.match(await res.text(), /couldn't find that gallery/);
 });
+
+test('scripts and styles are re-checked after updates', async () => {
+  const js = await fetch(`${base}/assets/gallery.js`);
+  assert.equal(js.headers.get('cache-control'), 'no-cache');
+  const css = await fetch(`${base}/assets/app.css`);
+  assert.equal(css.headers.get('cache-control'), 'no-cache');
+  const img = await fetch(`${base}/assets/jar.png`);
+  assert.match(img.headers.get('cache-control'), /max-age=3600/);
+});
