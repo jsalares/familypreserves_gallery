@@ -15,14 +15,35 @@
     <img src="/assets/jar.png" alt="">
     <div><span class="brand-name serif">Family Preserves</span><span class="brand-tag">Preserve · Enhance · Relive</span></div>
   </div>
-  <button class="btn btn-ghost" id="signout" type="button">Sign out</button>
+  <div class="topbar-right">
+    <span class="save-status" id="save-status" role="status" aria-live="polite"></span>
+    <button class="btn btn-ghost" id="signout" type="button">Sign out</button>
+  </div>
 </header>
-<main class="wrap">
-  <p class="eyebrow" id="eyebrow"></p>
-  <h1 class="title serif" id="title">Your photos</h1>
-  <p class="status" id="status" role="status">Loading your photos…</p>
-  <div id="folders"></div>
-</main>
+
+<section class="intro wrap-wide">
+  <div>
+    <p class="eyebrow" id="eyebrow"></p>
+    <h1 class="title serif" id="title">Your photos</h1>
+  </div>
+  <div class="help">
+    <button class="help-btn serif" id="help-btn" type="button" aria-expanded="false" aria-controls="help-pop" aria-label="How this works">?</button>
+    <div class="help-pop" id="help-pop" role="dialog" aria-label="How this works" hidden>
+      <div class="help-head">
+        <strong class="serif">How this works</strong>
+        <button type="button" class="icon-btn" id="help-close" aria-label="Close">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
+      <p>Categorize your pictures by creating custom folders and assigning photos to those folders. You can also add other details like year, event and people, so your photos are easy to search.</p>
+    </div>
+  </div>
+</section>
+
+<div class="shelves" id="shelves"></div>
+<p class="notice" id="notice" role="alert" hidden></p>
+<main class="wrap-wide main" id="main"><p class="status">Loading your photos…</p></main>
+
 <script src="/assets/gallery.js"></script>
 </body>
 </html>
