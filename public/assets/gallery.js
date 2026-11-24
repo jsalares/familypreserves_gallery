@@ -1,5 +1,5 @@
 // Family Preserves customer gallery: sort copies into custom folders, add
-// details, tag people, mark photos to enhance.
+// details, tag people, turn photos, mark photos to restore.
 //
 // Every edit shows on screen at once and is queued as a "change" (see
 // server/changes.js). The queue sends changes in the background and retries
@@ -24,6 +24,8 @@ const ICON = {
   lock: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>`,
   trash: `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>`,
   left: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>`,
+  rotL: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9V4M4 9h5"/><path d="M4.6 9A8 8 0 1 1 4 13"/></svg>`,
+  rotR: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 9V4M20 9h-5"/><path d="M19.4 9A8 8 0 1 0 20 13"/></svg>`,
   right: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>`,
   chevron: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>`,
 };
@@ -45,6 +47,7 @@ const S = {
   keepId: null, // a just-filed photo that stays on screen until the customer moves on
   barOpen: true,
   confirmDelete: false,
+  zoom: null, // { id, side } when one side of a two-sided photo is shown on its own
   folderDraft: '',
 };
 
@@ -80,7 +83,7 @@ function visiblePhotos() {
 
 function viewTitle() {
   const v = S.view;
-  let t = v.kind === 'all' ? 'All photos' : v.kind === 'source' ? `${v.name} (original)` : v.name;
+  let t = v.kind === 'all' ? 'All photos' : v.kind === 'source' ? `${v.name} (scanned folder)` : v.name;
   if (S.onlyUnfiled && v.kind !== 'folder') t += ', not in a custom folder';
   return t;
 }
@@ -259,6 +262,13 @@ function setField(photo, field, value) {
   saver.add({ op: 'photo.field', photoId: photo.id, field, value }, `t:${photo.id}:${field}`, 900);
 }
 
+function rotate(photo, side, dir) {
+  const target = side === 'back' ? photo.back : photo;
+  if (!target) return;
+  target.rotation = (target.rotation + dir + 360) % 360;
+  saver.add({ op: 'photo.rotate', photoId: photo.id, side, degrees: target.rotation }, `r:${photo.id}:${side}`);
+}
+
 function toggleEnhance(photo) {
   photo.enhance = !photo.enhance;
   saver.add({ op: 'photo.enhance', photoId: photo.id, on: photo.enhance }, `e:${photo.id}`);
@@ -285,8 +295,8 @@ function renderShelves() {
     </div>`;
   if (S.barOpen) {
     html += `<div id="shelf-body" class="shelves-inner shelf-body">
-      <div class="shelf" role="group" aria-label="Original folders">
-        <span class="shelf-label">Originals</span>
+      <div class="shelf" role="group" aria-label="Scanned folders">
+        <span class="shelf-label">Scanned folders</span>
         ${chip('chip-source', 'view-all', 'All', S.photos.length, v.kind === 'all')}
         ${S.sources
           .map((f) => chip('chip-source', 'view-source', f.name, f.count, v.kind === 'source' && v.name === f.name, `data-name="${esc(f.name)}"`))
@@ -321,10 +331,10 @@ function renderShelves() {
 function renderBanner() {
   const v = S.view;
   if (v.kind === 'source') {
-    return `<section class="banner banner-original" aria-label="You are viewing an original folder">
+    return `<section class="banner banner-original" aria-label="You are viewing a scanned folder">
       ${ICON.folder()}
       <div class="banner-text">
-        <span class="kicker">${ICON.lock} Original folder · as scanned</span>
+        <span class="kicker">${ICON.lock} Scanned folder · as we received them</span>
         <span class="name serif">${esc(v.name)}</span>
         <span class="sub">These photos stay here permanently. Copy them into your custom folders and add details as you go.</span>
       </div>
@@ -333,7 +343,7 @@ function renderBanner() {
   if (v.kind === 'folder') {
     const n = S.photos.filter((p) => inFolder(p, v.name)).length;
     const actions = S.confirmDelete
-      ? `<span class="q" role="alert">Delete “${esc(v.name)}” and its ${plural(n, 'copy', 'copies')}? Your originals are not affected.</span>
+      ? `<span class="q" role="alert">Delete “${esc(v.name)}” and its ${plural(n, 'copy', 'copies')}? The photos stay in your scanned folders.</span>
          <button type="button" class="btn-light" data-act="delete-folder">Yes, delete</button>
          <button type="button" class="btn-outline-light" data-act="cancel-delete">Cancel</button>`
       : `<button type="button" class="btn-outline-light" data-act="ask-delete">${ICON.trash} Delete this folder</button>`;
@@ -342,7 +352,7 @@ function renderBanner() {
       <div class="banner-text">
         <span class="kicker">Custom folder · copies</span>
         <span class="name serif">${esc(v.name)}</span>
-        <span class="sub">Removing a photo here only removes this copy. The original stays safe.</span>
+        <span class="sub">Removing a photo here only removes this copy. It stays in its scanned folder.</span>
       </div>
       <div class="banner-actions">${actions}</div>
     </section>`;
@@ -361,8 +371,9 @@ function renderGrid(list) {
     .map(
       (p) => `<figure class="tile">
         <button type="button" class="tile-img" data-act="open" data-id="${p.id}" aria-label="Open ${esc(p.filename)}">
-          <img src="${esc(p.thumb)}" alt="" loading="lazy" decoding="async">
-          ${p.enhance ? '<span class="badge">Enhance</span>' : ''}
+          <img src="${esc(p.thumb)}" alt="" loading="lazy" decoding="async" class="r${p.rotation}">
+          ${p.back ? '<span class="badge badge-left">Front &amp; back</span>' : ''}
+          ${p.enhance ? '<span class="badge">Restore</span>' : ''}
         </button>
         ${removeFrom ? `<button type="button" class="pill pill-remove" data-act="remove-here" data-id="${p.id}">${ICON.x} Remove from ${esc(removeFrom)}</button>` : ''}
         <figcaption>
@@ -381,6 +392,33 @@ function renderGrid(list) {
     .join('')}</div>`;
 }
 
+// The big photo. A photo with a back shows both sides next to each other;
+// tapping one shows it on its own, tapping again goes back to both.
+function renderStage(p) {
+  const sides = [{ side: 'front', label: 'Front', src: p.screen, rot: p.rotation }];
+  if (p.back) sides.push({ side: 'back', label: 'Back', src: p.back.screen, rot: p.back.rotation });
+  const zoom = p.back && S.zoom?.id === p.id ? S.zoom.side : null;
+  const shown = zoom ? sides.filter((x) => x.side === zoom) : sides;
+  const alt = (x) => `${p.back ? `${x.label} of ` : ''}${p.caption || p.filename}`;
+  const img = (x) => `<img src="${esc(x.src)}" alt="${esc(alt(x))}" class="r${x.rot}">`;
+  const frame = shown
+    .map((x) =>
+      p.back
+        ? `<button type="button" class="side" data-act="zoom-side" data-id="${p.id}" data-side="${x.side}" aria-label="${zoom ? 'Show both sides' : `Look closer at the ${x.label.toLowerCase()}`}">
+            ${img(x)}<span class="side-label">${x.label}</span></button>`
+        : `<div class="side">${img(x)}</div>`
+    )
+    .join('');
+  const turn = (x) => `<span class="rotate-group">${p.back ? `<span class="rotate-label">${x.label}</span>` : ''}
+      <button type="button" class="round" data-act="rotate" data-id="${p.id}" data-side="${x.side}" data-dir="-90" aria-label="Turn the ${x.label.toLowerCase()} left">${ICON.rotL}</button>
+      <button type="button" class="round" data-act="rotate" data-id="${p.id}" data-side="${x.side}" data-dir="90" aria-label="Turn the ${x.label.toLowerCase()} right">${ICON.rotR}</button>
+    </span>`;
+  return `<div class="stage-frame${shown.length > 1 ? ' two' : ''}${zoom ? ' zoomed' : ''}">${frame}</div>
+    <div class="rotate-bar">${shown.map(turn).join('')}
+      ${zoom ? `<button type="button" class="pill" data-act="zoom-side" data-id="${p.id}" data-side="${zoom}">Show both sides</button>` : ''}
+    </div>`;
+}
+
 function renderViewer(list) {
   let i = list.findIndex((p) => p.id === S.openId);
   if (i < 0) i = 0;
@@ -388,12 +426,12 @@ function renderViewer(list) {
   S.openId = p.id;
   const enhancedCount = S.photos.filter((x) => x.enhance).length;
   const where = p.customFolders.length
-    ? `Edits here update the original in ${p.folder} and its copies in ${p.customFolders.join(', ')}.`
-    : `Edits here update the original in ${p.folder}, and any copies you make later.`;
+    ? `Edits here apply to this photo in ${p.folder} and its copies in ${p.customFolders.join(', ')}.`
+    : `Edits here apply to this photo in ${p.folder}, and any copies you make later.`;
   const removeFrom = S.view.kind === 'folder' ? S.view.name : null;
 
   return `<div class="viewer-nav">
-      <span>${esc(p.filename)} · Original folder: <strong>${esc(p.folder)}</strong></span>
+      <span>${esc(p.filename)} · Scanned folder: <strong>${esc(p.folder)}</strong></span>
       <span class="arrows">${i + 1} of ${list.length}
         <button type="button" class="round" data-act="prev" aria-label="Previous photo">${ICON.left}</button>
         <button type="button" class="round primary" data-act="next" aria-label="Next photo">${ICON.right}</button>
@@ -401,7 +439,7 @@ function renderViewer(list) {
     </div>
     <div class="viewer">
       <div class="stage">
-        <div class="stage-frame"><img src="${esc(p.screen)}" alt="${esc(p.caption || p.filename)}" width="${p.width || ''}" height="${p.height || ''}"></div>
+        ${renderStage(p)}
       </div>
       <aside class="panel" data-photo="${p.id}">
         ${removeFrom ? `<button type="button" class="remove-here" data-act="remove-here" data-id="${p.id}">${ICON.x} Remove from ${esc(removeFrom)}</button>` : ''}
@@ -446,9 +484,9 @@ function renderViewer(list) {
         <button type="button" class="enhance" data-act="enhance" data-id="${p.id}" aria-pressed="${p.enhance}">
           <span class="tick">${p.enhance ? ICON.check(18) : ''}</span>
           <span class="enhance-text">
-            <span class="t serif">Enhance this photo</span>
-            <span class="d">Colour restoration, scratch and dust repair. We'll send you a quote before doing any work.</span>
-            <span class="c">${plural(enhancedCount, 'photo', 'photos')} marked for enhancement so far</span>
+            <span class="t serif">Restore this photo</span>
+            <span class="d">Repair of tears, creases, stains, fading and missing pieces. We'll send you a quote before doing any work.</span>
+            <span class="c">${plural(enhancedCount, 'photo', 'photos')} marked for restoration so far</span>
           </span>
         </button>
       </aside>
@@ -457,7 +495,7 @@ function renderViewer(list) {
       ${list
         .map(
           (x) => `<button type="button" data-act="open" data-id="${x.id}" aria-label="Go to ${esc(x.filename)}${x.customFolders.length ? ' (in a custom folder)' : ''}" aria-current="${x.id === p.id}">
-            <img src="${esc(x.thumb)}" alt="" loading="lazy" decoding="async">
+            <img src="${esc(x.thumb)}" alt="" loading="lazy" decoding="async" class="r${x.rotation}">
             ${x.customFolders.length ? `<span class="filed">${ICON.check(10)}</span>` : ''}
           </button>`
         )
@@ -504,6 +542,8 @@ function focusKey() {
   let sel = `[data-act="${d.act}"]`;
   if (d.id) sel += `[data-id="${d.id}"]`;
   if (d.name) sel += `[data-name="${CSS.escape(d.name)}"]`;
+  if (d.side) sel += `[data-side="${d.side}"]`;
+  if (d.dir) sel += `[data-dir="${d.dir}"]`;
   return sel;
 }
 
@@ -562,6 +602,8 @@ document.addEventListener('click', (e) => {
     case 'remove-here': if (S.mode === 'photo') stepFrom(photo, 1); toggleFolder(photo, S.view.name); break;
     case 'toggle-person': togglePerson(photo, name); break;
     case 'enhance': toggleEnhance(photo); break;
+    case 'zoom-side': S.zoom = S.zoom?.id === photo.id ? null : { id: photo.id, side: t.dataset.side }; break;
+    case 'rotate': rotate(photo, t.dataset.side, Number(t.dataset.dir)); break;
     case 'ask-delete': S.confirmDelete = true; break;
     case 'cancel-delete': S.confirmDelete = false; break;
     case 'delete-folder': deleteFolder(S.view.name); break;

@@ -134,43 +134,77 @@ export function createApp(config) {
     }
   });
 
-  // Record uploaded photos. Safe to repeat: a photo is matched by its original
-  // folder and filename.
+  // Record uploaded photos. Safe to repeat: a photo is matched by its scanned
+  // folder and filename. A photo may carry its back scan.
   admin.post('/orders/:code/photos', (req, res) => {
     const order = findOrder(req, res);
     if (!order) return;
     const photos = Array.isArray(req.body?.photos) ? req.body.photos : [];
     if (photos.length === 0 || photos.length > MAX_BATCH) return res.status(400).json({ error: `Send 1 to ${MAX_BATCH} photos.` });
     const prefix = `orders/${order.code}/`;
+    const side = (p, what) => {
+      const filename = String(p?.filename || '').trim();
+      if (!filename || filename.length > 255) throw new Error(`${what} needs a filename.`);
+      if (!SHA256.test(String(p.sha256))) throw new Error(`Bad checksum for ${filename}.`);
+      const enhancedKey = p.enhancedKey ?? p.originalKey; // older upload tools sent originalKey
+      for (const k of [enhancedKey, p.screenKey, p.thumbKey]) {
+        assertSafeKey(k);
+        if (!k.startsWith(prefix)) throw new Error(`Key must start with ${prefix}`);
+      }
+      return {
+        filename,
+        sha256: p.sha256,
+        bytes: Number(p.bytes) || 0,
+        width: Number(p.width) || null,
+        height: Number(p.height) || null,
+        enhanced_key: enhancedKey,
+        screen_key: p.screenKey,
+        thumb_key: p.thumbKey,
+      };
+    };
     try {
       db.transaction(() => {
         for (const p of photos) {
           const folder = String(p.folder || '').trim();
-          const filename = String(p.filename || '').trim();
-          if (!folder || !filename || folder.length > 200 || filename.length > 255) throw new Error('Each photo needs a folder and filename.');
-          if (!SHA256.test(String(p.sha256))) throw new Error(`Bad checksum for ${filename}.`);
-          for (const k of [p.originalKey, p.screenKey, p.thumbKey]) {
-            assertSafeKey(k);
-            if (!k.startsWith(prefix)) throw new Error(`Key must start with ${prefix}`);
-          }
+          if (!folder || folder.length > 200) throw new Error('Each photo needs a folder.');
+          const front = side(p, 'Each photo');
+          const back = p.back ? side(p.back, `The back of ${front.filename}`) : null;
           let sf = q.sourceFolder.get(order.id, folder);
           if (!sf) sf = { id: q.insertSourceFolder.run(order.id, folder).lastInsertRowid };
-          q.upsertPhoto.run({
-            order_id: order.id,
-            source_folder_id: sf.id,
-            filename,
-            sha256: p.sha256,
-            bytes: Number(p.bytes) || 0,
-            width: Number(p.width) || null,
-            height: Number(p.height) || null,
-            original_key: p.originalKey,
-            screen_key: p.screenKey,
-            thumb_key: p.thumbKey,
-          });
+          const { id } = q.upsertPhoto.get({ order_id: order.id, source_folder_id: sf.id, ...front });
+          if (back) q.upsertBack.run({ photo_id: id, ...back });
+          else q.deleteBack.run(id);
         }
         q.renumber(order.id);
       })();
       res.json({ ok: true, total: q.countPhotos.get(order.id).n });
+    } catch (err) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Record raw scans (uploaded as they are, for download only).
+  admin.post('/orders/:code/raw-files', (req, res) => {
+    const order = findOrder(req, res);
+    if (!order) return;
+    const files = Array.isArray(req.body?.files) ? req.body.files : [];
+    if (files.length === 0 || files.length > MAX_BATCH) return res.status(400).json({ error: `Send 1 to ${MAX_BATCH} files.` });
+    const prefix = `orders/${order.code}/raw/`;
+    try {
+      db.transaction(() => {
+        for (const f of files) {
+          const p = String(f.path || '');
+          // A relative path with / separators that can't climb out of the order.
+          if (!p || p.length > 500 || p.startsWith('/') || p.includes('\\') || p.split('/').some((s) => s === '' || s === '.' || s === '..') || /[\x00-\x1f\x7f]/.test(p)) {
+            throw new Error(`Bad raw file path: ${p}`);
+          }
+          if (!SHA256.test(String(f.sha256))) throw new Error(`Bad checksum for ${p}.`);
+          assertSafeKey(f.key);
+          if (!f.key.startsWith(prefix)) throw new Error(`Key must start with ${prefix}`);
+          q.upsertRawFile.run({ order_id: order.id, path: p, sha256: f.sha256, bytes: Number(f.bytes) || 0, key: f.key });
+        }
+      })();
+      res.json({ ok: true, total: q.countRawFiles.get(order.id).n });
     } catch (err) {
       res.status(400).json({ error: err.message });
     }
@@ -257,6 +291,16 @@ export function createApp(config) {
         height: p.height,
         thumb: await storage.viewUrl(p.thumb_key),
         screen: await storage.viewUrl(p.screen_key),
+        back: p.back_screen_key
+          ? {
+              filename: p.back_filename,
+              rotation: p.back_rotation,
+              width: p.back_width,
+              height: p.back_height,
+              thumb: await storage.viewUrl(p.back_thumb_key),
+              screen: await storage.viewUrl(p.back_screen_key),
+            }
+          : null,
         customFolders: org.foldersByPhoto.get(p.id) || [],
         people: org.peopleByPhoto.get(p.id) || [],
         year: p.year || '',
@@ -264,6 +308,7 @@ export function createApp(config) {
         event: p.event || '',
         caption: p.caption || '',
         enhance: Boolean(p.enhance),
+        rotation: p.rotation,
       }))
     );
     const folders = q.sourceFolders.all(order.id).map((f) => ({

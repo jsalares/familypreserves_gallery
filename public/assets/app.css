@@ -186,7 +186,28 @@ a { color: var(--green-700); }
 .viewer { display: flex; flex-wrap: wrap; gap: 28px; align-items: flex-start; }
 .stage { flex: 999 1 520px; min-width: 0; }
 .stage-frame { display: flex; align-items: center; justify-content: center; background: #2a2f2c; border-radius: 6px; height: min(70vh, 720px); }
-.stage-frame img { max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; }
+.stage-frame.two, .stage-frame.zoomed { gap: 10px; padding: 10px; }
+/* Each side is a size container, so a turned photo can be fitted with cq units. */
+.side { position: relative; flex: 1 1 0; min-width: 0; height: 100%; display: flex; align-items: center; justify-content: center; padding: 0; border: 0; background: none; container-type: size; }
+button.side { cursor: zoom-in; border-radius: 4px; }
+.stage-frame.zoomed button.side { cursor: zoom-out; }
+button.side:focus-visible { outline: 3px solid var(--tan); outline-offset: -3px; }
+.side img { max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; }
+.side img.r180 { transform: rotate(180deg); }
+.side img.r90, .side img.r270 { max-width: 100cqh; max-height: 100cqw; }
+.side img.r90 { transform: rotate(90deg); }
+.side img.r270 { transform: rotate(-90deg); }
+.side-label { position: absolute; left: 8px; bottom: 8px; padding: 2px 8px; border-radius: 10px; font-size: 12px; font-weight: 700; background: rgba(20, 43, 37, 0.85); color: var(--cream); }
+.rotate-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; margin-top: 10px; }
+.rotate-group { display: inline-flex; align-items: center; gap: 6px; }
+.rotate-label { font-size: 14px; font-weight: 600; color: var(--muted); margin-right: 2px; }
+/* Turned thumbnails still fill their 4:3 box. */
+.tile-img, .filmstrip button { container-type: size; }
+.tile-img img.r180, .filmstrip img.r180 { transform: rotate(180deg); }
+.tile-img img.r90, .tile-img img.r270, .filmstrip img.r90, .filmstrip img.r270 { position: absolute; left: 50%; top: 50%; width: 100cqh; height: 100cqw; }
+.tile-img img.r90, .filmstrip img.r90 { transform: translate(-50%, -50%) rotate(90deg); }
+.tile-img img.r270, .filmstrip img.r270 { transform: translate(-50%, -50%) rotate(-90deg); }
+.badge.badge-left { right: auto; left: 8px; background: var(--green-900); }
 .panel { flex: 1 1 320px; min-width: 0; background: var(--white); border: 1px solid var(--line); border-radius: 10px; padding: 20px; display: flex; flex-direction: column; gap: 20px; }
 .panel h3 { margin: 0 0 8px; font-size: 13px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--brown); }
 .remove-here { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 48px; border: 2px solid var(--green-900); border-radius: 6px; background: var(--white); color: var(--green-900); font-weight: 700; cursor: pointer; }

@@ -10,10 +10,12 @@ import net from 'node:net';
 import sharp from 'sharp';
 import { loadConfig } from '../server/config.js';
 import { createApp } from '../server/app.js';
-import { uploadOrder, findPhotos } from '../uploader/upload.js';
+import { uploadOrder, findPhotos, scanOrder } from '../uploader/upload.js';
+import Database from 'better-sqlite3';
+import { openDb, MIGRATIONS } from '../server/db.js';
 
 const ADMIN_TOKEN = 'test-admin-token-0123456789abcdef';
-let tmp, server, base, close, orderDir;
+let tmp, server, base, close, orderDir, db;
 const quiet = () => {};
 
 async function freePort() {
@@ -44,6 +46,7 @@ before(async () => {
   });
   const created = createApp(config);
   close = created.close;
+  db = created.db;
   await new Promise((resolve) => (server = created.app.listen(port, '127.0.0.1', resolve)));
 
   orderDir = path.join(tmp, 'FP-1042 Martin');
@@ -255,4 +258,112 @@ test('scripts and styles are re-checked after updates', async () => {
   assert.equal(css.headers.get('cache-control'), 'no-cache');
   const img = await fetch(`${base}/assets/jar.png`);
   assert.match(img.headers.get('cache-control'), /max-age=3600/);
+});
+
+test('backs go with their fronts, and raw folders upload untouched', async () => {
+  const dir = path.join(tmp, 'FP-3000 Lee');
+  await makeImage(path.join(dir, 'Album 1', 'scan1.jpg'), 1000, 800, '#998877');
+  await makeImage(path.join(dir, 'Album 1', 'scan1_b.jpg'), 1000, 800, '#ddddcc');
+  await makeImage(path.join(dir, 'Album 1', 'scan2.jpg'), 900, 700, '#887766');
+  await makeImage(path.join(dir, 'Album 1', 'stray_b.jpg'), 600, 400, '#556677'); // no front
+  fs.mkdirSync(path.join(dir, 'Album 1', 'raw'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'Album 1', 'raw', 'scan1.tif'), 'raw front bytes');
+  fs.writeFileSync(path.join(dir, 'Album 1', 'raw', 'notes.xmp'), 'any file in raw is kept');
+  fs.mkdirSync(path.join(dir, 'RAW', 'Box'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'RAW', 'Box', 'b.tif'), 'order-level raw');
+
+  const scan = scanOrder(dir);
+  assert.deepEqual(
+    scan.photos.map((p) => [p.folder, p.filename, p.back?.filename ?? null]),
+    [
+      ['Album 1', 'scan1.jpg', 'scan1_b.jpg'],
+      ['Album 1', 'scan2.jpg', null],
+      ['Album 1', 'stray_b.jpg', null],
+    ]
+  );
+  assert.deepEqual(scan.raws.map((r) => r.path), ['Album 1/raw/notes.xmp', 'Album 1/raw/scan1.tif', 'RAW/Box/b.tif']);
+  assert.match(scan.warnings.join('\n'), /stray_b\.jpg looks like the back/);
+
+  const result = await uploadOrder({ dir, order: 'FP-3000', title: 'Lee', galleryUrl: base, adminToken: ADMIN_TOKEN, log: quiet });
+  assert.equal(result.uploaded, 3);
+  assert.equal(result.rawUploaded, 3);
+  assert.equal(result.failed.length, 0);
+
+  const raws = db.prepare(`SELECT r.path, r.key, r.bytes FROM raw_files r JOIN orders o ON o.id = r.order_id WHERE o.code = 'FP-3000' ORDER BY r.path`).all();
+  assert.equal(raws.length, 3);
+  assert.match(raws[1].key, /^orders\/FP-3000\/raw\/[a-f0-9]{64}\.tif$/);
+  assert.equal(fs.readFileSync(path.join(tmp, 'data', 'files', raws[1].key), 'utf8'), 'raw front bytes');
+
+  const again = await uploadOrder({ dir, order: 'FP-3000', galleryUrl: base, adminToken: ADMIN_TOKEN, log: quiet });
+  assert.equal(again.skipped, 3);
+  assert.equal(again.rawSkipped, 3);
+
+  // The customer sees the back with its photo, and can turn each side.
+  const reset = await fetch(`${base}/api/admin/orders/FP-3000/reset-code`, { method: 'POST', headers: { authorization: `Bearer ${ADMIN_TOKEN}` } });
+  const { accessCode, order } = await reset.json();
+  const slug = order.url.split('/').pop();
+  const signIn = await fetch(`${base}/api/g/${slug}/sign-in`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-forwarded-for': '10.0.0.9' },
+    body: JSON.stringify({ code: accessCode }),
+  });
+  assert.equal(signIn.status, 200);
+  const leeCookie = signIn.headers.get('set-cookie').split(';')[0];
+  const load = async () => (await fetch(`${base}/api/g/${slug}/gallery`, { headers: { cookie: leeCookie } })).json();
+  const data = await load();
+  const [front, plain] = data.photos;
+  assert.equal(front.back.filename, 'scan1_b.jpg');
+  assert.ok(front.back.screen && front.back.thumb);
+  assert.equal(plain.back, null);
+  assert.equal(front.rotation, 0);
+
+  const change = async (changes) =>
+    (await (await fetch(`${base}/api/g/${slug}/changes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: leeCookie },
+      body: JSON.stringify({ changes }),
+    })).json()).results;
+  const results = await change([
+    { op: 'photo.rotate', photoId: front.id, side: 'front', degrees: 90 },
+    { op: 'photo.rotate', photoId: front.id, side: 'back', degrees: 270 },
+    { op: 'photo.rotate', photoId: plain.id, side: 'back', degrees: 90 },
+    { op: 'photo.rotate', photoId: plain.id, side: 'front', degrees: 45 },
+  ]);
+  assert.deepEqual(results.map((r) => r.ok), [true, true, false, false]);
+  const after = await load();
+  assert.equal(after.photos[0].rotation, 90);
+  assert.equal(after.photos[0].back.rotation, 270);
+
+  // Re-running the upload keeps the customer's turns.
+  await uploadOrder({ dir, order: 'FP-3000', galleryUrl: base, adminToken: ADMIN_TOKEN, log: quiet });
+  const kept = await load();
+  assert.equal(kept.photos[0].rotation, 90);
+  assert.equal(kept.photos[0].back.rotation, 270);
+});
+
+test('raw file paths cannot climb out of the order', async () => {
+  const res = await fetch(`${base}/api/admin/orders/FP-3000/raw-files`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${ADMIN_TOKEN}` },
+    body: JSON.stringify({ files: [{ path: '../x.tif', sha256: 'a'.repeat(64), bytes: 1, key: `orders/FP-3000/raw/${'a'.repeat(64)}.tif` }] }),
+  });
+  assert.equal(res.status, 400);
+});
+
+test('a version 1 database upgrades and keeps its photos', () => {
+  const dir = path.join(tmp, 'old-db');
+  fs.mkdirSync(dir);
+  const old = new Database(path.join(dir, 'gallery.sqlite'));
+  old.exec(MIGRATIONS[0]);
+  old.pragma('user_version = 1');
+  old.exec(`INSERT INTO orders (code, title, slug, access_hash) VALUES ('FP-1', 'x', 'fp-1-aaaaaaaa', 'h');
+            INSERT INTO source_folders (order_id, name) VALUES (1, 'Album');
+            INSERT INTO photos (order_id, source_folder_id, filename, sha256, bytes, original_key, screen_key, thumb_key)
+            VALUES (1, 1, 'a.jpg', 'abc', 1, 'orders/FP-1/original/abc.jpg', 's', 't');`);
+  old.close();
+  const upgraded = openDb(dir);
+  const row = upgraded.prepare('SELECT enhanced_key, rotation FROM photos').get();
+  assert.deepEqual({ ...row }, { enhanced_key: 'orders/FP-1/original/abc.jpg', rotation: 0 });
+  assert.equal(upgraded.pragma('user_version', { simple: true }), MIGRATIONS.length);
+  upgraded.close();
 });

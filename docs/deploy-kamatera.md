@@ -89,4 +89,4 @@ nssm restart FamilyPreservesGallery
 
 Until the nightly backup (roadmap step 5) is built, copy
 `data\gallery.sqlite` somewhere safe after uploading orders. The photos
-themselves are in R2, and your originals stay on your PC.
+themselves (raw originals and enhanced versions) are in R2, and your own copies stay on your PC.
