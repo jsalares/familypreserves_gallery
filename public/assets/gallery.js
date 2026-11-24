@@ -492,14 +492,43 @@ function renderMain() {
       </div>
     </div>
     ${list.length === 0 ? `<p class="empty">${empty}</p>` : S.mode === 'photo' ? renderViewer(list) : renderGrid(list)}`;
-  const current = document.querySelector('.filmstrip [aria-current="true"]');
-  if (current) current.scrollIntoView({ block: 'nearest', inline: 'center' });
 }
 
+// Which control has focus, as a selector that finds its twin after a re-render.
+function focusKey() {
+  const el = document.activeElement;
+  if (!el || el === document.body) return null;
+  const d = el.dataset || {};
+  if (d.field) return `[data-field="${d.field}"]`;
+  if (!d.act) return null;
+  let sel = `[data-act="${d.act}"]`;
+  if (d.id) sel += `[data-id="${d.id}"]`;
+  if (d.name) sel += `[data-name="${CSS.escape(d.name)}"]`;
+  return sel;
+}
+
+let lastOpenId = null;
+
+// Re-draws the screen without moving the page: the filmstrip keeps its
+// sideways scroll, focus stays on the same control, and only a change of
+// photo slides the filmstrip (never the page) to the current thumbnail.
 function render() {
+  const strip = document.querySelector('.filmstrip');
+  const stripLeft = strip ? strip.scrollLeft : 0;
+  const key = focusKey();
   renderShelves();
   renderMain();
   renderSaveStatus();
+  const newStrip = document.querySelector('.filmstrip');
+  if (newStrip) {
+    newStrip.scrollLeft = stripLeft;
+    const current = newStrip.querySelector('[aria-current="true"]');
+    if (current && S.openId !== lastOpenId) {
+      newStrip.scrollLeft = current.offsetLeft - (newStrip.clientWidth - current.offsetWidth) / 2;
+    }
+  }
+  lastOpenId = S.mode === 'photo' ? S.openId : null;
+  if (key) document.querySelector(key)?.focus({ preventScroll: true });
 }
 
 // ------------------------------------------------------------------ events
@@ -522,7 +551,12 @@ document.addEventListener('click', (e) => {
     case 'only-unfiled': S.onlyUnfiled = !S.onlyUnfiled; S.openId = null; break;
     case 'mode-photo': S.mode = 'photo'; break;
     case 'mode-grid': S.mode = 'grid'; break;
-    case 'open': S.openId = photo.id; S.mode = 'photo'; window.scrollTo({ top: $('main').offsetTop - 80 }); break;
+    case 'open':
+      // From the grid, jump up to the big photo. From the filmstrip, stay put.
+      if (S.mode === 'grid') window.scrollTo({ top: $('main').offsetTop - 80 });
+      S.openId = photo.id;
+      S.mode = 'photo';
+      break;
     case 'prev': case 'next': move(t.dataset.act === 'next' ? 1 : -1); return;
     case 'toggle-folder': toggleFolder(photo, name); break;
     case 'remove-here': if (S.mode === 'photo') stepFrom(photo, 1); toggleFolder(photo, S.view.name); break;
@@ -542,7 +576,7 @@ function move(dir) {
   let i = list.findIndex((p) => p.id === S.openId);
   if (i < 0) i = 0;
   S.openId = list[(i + dir + list.length) % list.length].id;
-  renderMain();
+  render();
 }
 
 document.addEventListener('change', (e) => {
@@ -578,7 +612,7 @@ document.addEventListener('submit', (e) => {
   if (form.dataset.form === 'add-person') addPerson(byId.get(Number(form.dataset.id)), value);
   render();
   const again = document.querySelector(`[data-form="${form.dataset.form}"] input`);
-  if (again) again.focus();
+  if (again) again.focus({ preventScroll: true });
 });
 
 document.addEventListener('keydown', (e) => {
