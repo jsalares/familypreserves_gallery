@@ -35,6 +35,8 @@ export function createChangeHandler(db) {
     tag: db.prepare('INSERT OR IGNORE INTO photo_people (photo_id, person_id) VALUES (?, ?)'),
     untag: db.prepare('DELETE FROM photo_people WHERE photo_id = ? AND person_id = ?'),
     enhance: db.prepare('UPDATE photos SET enhance = ? WHERE id = ? AND order_id = ?'),
+    rotateFront: db.prepare('UPDATE photos SET rotation = ? WHERE id = ? AND order_id = ?'),
+    rotateBack: db.prepare('UPDATE photo_backs SET rotation = ? WHERE photo_id = ?'),
     field: Object.fromEntries(
       Object.keys(TEXT_FIELDS).map((f) => [f, db.prepare(`UPDATE photos SET ${f} = ? WHERE id = ? AND order_id = ?`)])
     ),
@@ -96,6 +98,18 @@ export function createChangeHandler(db) {
         const value = String(c.value ?? '').trim();
         if (value.length > max) throw new ChangeError(`That ${c.field} is too long.`);
         st.field[c.field].run(value || null, needPhoto(orderId, c.photoId), orderId);
+        return;
+      }
+      case 'photo.rotate': {
+        // The end result ("turned 90 degrees"), not a step, so resending is harmless.
+        const degrees = Number(c.degrees);
+        if (![0, 90, 180, 270].includes(degrees)) throw new ChangeError('A photo can only be turned in quarter turns.');
+        const photoId = needPhoto(orderId, c.photoId);
+        if (c.side === 'back') {
+          if (st.rotateBack.run(degrees, photoId).changes === 0) throw new ChangeError('That photo has no back.');
+        } else {
+          st.rotateFront.run(degrees, photoId, orderId);
+        }
         return;
       }
       case 'photo.enhance':

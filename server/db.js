@@ -80,15 +80,36 @@ export const MIGRATIONS = [
 
   CREATE INDEX photos_by_order ON photos (order_id, source_folder_id, position);
   `,
-  // 2: each photo is a pair. The file customers see is the ENHANCED version
-  // (colour corrected); the raw scan is the ORIGINAL, kept only for download.
-  // What version 1 called original_key was always the file customers saw.
+  // 2: photos are the enhanced (colour-corrected) versions; some have a back
+  // scan. Raw scans are stored as plain files, only for download.
   `
   ALTER TABLE photos RENAME COLUMN original_key TO enhanced_key;
-  ALTER TABLE photos ADD COLUMN raw_filename TEXT;
-  ALTER TABLE photos ADD COLUMN raw_sha256 TEXT;
-  ALTER TABLE photos ADD COLUMN raw_bytes INTEGER;
-  ALTER TABLE photos ADD COLUMN raw_key TEXT;
+  -- Degrees clockwise the customer turned the photo: 0, 90, 180 or 270.
+  ALTER TABLE photos ADD COLUMN rotation INTEGER NOT NULL DEFAULT 0;
+
+  CREATE TABLE photo_backs (
+    photo_id      INTEGER PRIMARY KEY REFERENCES photos(id) ON DELETE CASCADE,
+    filename      TEXT NOT NULL,
+    sha256        TEXT NOT NULL,
+    bytes         INTEGER NOT NULL,
+    width         INTEGER,
+    height        INTEGER,
+    enhanced_key  TEXT NOT NULL,
+    screen_key    TEXT NOT NULL,
+    thumb_key     TEXT NOT NULL,
+    rotation      INTEGER NOT NULL DEFAULT 0
+  );
+
+  -- Everything from the order's "raw" folders, exactly as scanned.
+  CREATE TABLE raw_files (
+    id        INTEGER PRIMARY KEY,
+    order_id  INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    path      TEXT NOT NULL,                     -- e.g. Album 1/raw/scan001.tif
+    sha256    TEXT NOT NULL,
+    bytes     INTEGER NOT NULL,
+    key       TEXT NOT NULL,
+    UNIQUE (order_id, path)
+  );
   `,
 ];
 
@@ -130,23 +151,37 @@ export function createQueries(db) {
     setSourceFolderPosition: db.prepare('UPDATE source_folders SET position = ? WHERE id = ?'),
     upsertPhoto: db.prepare(`
       INSERT INTO photos (order_id, source_folder_id, filename, sha256, bytes, width, height,
-                          enhanced_key, screen_key, thumb_key,
-                          raw_filename, raw_sha256, raw_bytes, raw_key)
+                          enhanced_key, screen_key, thumb_key)
       VALUES (@order_id, @source_folder_id, @filename, @sha256, @bytes, @width, @height,
-              @enhanced_key, @screen_key, @thumb_key,
-              @raw_filename, @raw_sha256, @raw_bytes, @raw_key)
+              @enhanced_key, @screen_key, @thumb_key)
       ON CONFLICT (order_id, source_folder_id, filename) DO UPDATE SET
         sha256 = excluded.sha256, bytes = excluded.bytes, width = excluded.width,
         height = excluded.height, enhanced_key = excluded.enhanced_key,
-        screen_key = excluded.screen_key, thumb_key = excluded.thumb_key,
-        raw_filename = excluded.raw_filename, raw_sha256 = excluded.raw_sha256,
-        raw_bytes = excluded.raw_bytes, raw_key = excluded.raw_key
+        screen_key = excluded.screen_key, thumb_key = excluded.thumb_key
+      RETURNING id
     `),
+    upsertBack: db.prepare(`
+      INSERT INTO photo_backs (photo_id, filename, sha256, bytes, width, height, enhanced_key, screen_key, thumb_key)
+      VALUES (@photo_id, @filename, @sha256, @bytes, @width, @height, @enhanced_key, @screen_key, @thumb_key)
+      ON CONFLICT (photo_id) DO UPDATE SET
+        filename = excluded.filename, sha256 = excluded.sha256, bytes = excluded.bytes,
+        width = excluded.width, height = excluded.height, enhanced_key = excluded.enhanced_key,
+        screen_key = excluded.screen_key, thumb_key = excluded.thumb_key
+    `),
+    deleteBack: db.prepare('DELETE FROM photo_backs WHERE photo_id = ?'),
+    upsertRawFile: db.prepare(`
+      INSERT INTO raw_files (order_id, path, sha256, bytes, key) VALUES (@order_id, @path, @sha256, @bytes, @key)
+      ON CONFLICT (order_id, path) DO UPDATE SET sha256 = excluded.sha256, bytes = excluded.bytes, key = excluded.key
+    `),
+    countRawFiles: db.prepare('SELECT COUNT(*) AS n FROM raw_files WHERE order_id = ?'),
     photosInFolder: db.prepare('SELECT id, filename FROM photos WHERE source_folder_id = ?'),
     setPhotoPosition: db.prepare('UPDATE photos SET position = ? WHERE id = ?'),
     photosForOrder: db.prepare(`
-      SELECT p.*, f.name AS source_folder
+      SELECT p.*, f.name AS source_folder,
+             b.filename AS back_filename, b.width AS back_width, b.height AS back_height,
+             b.screen_key AS back_screen_key, b.thumb_key AS back_thumb_key, b.rotation AS back_rotation
       FROM photos p JOIN source_folders f ON f.id = p.source_folder_id
+      LEFT JOIN photo_backs b ON b.photo_id = p.id
       WHERE p.order_id = ?
       ORDER BY f.position, f.id, p.position, p.id
     `),

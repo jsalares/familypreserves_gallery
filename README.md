@@ -1,8 +1,8 @@
 # Family Preserves gallery
 
 The private online gallery where Family Preserves customers see their digitized
-photos, sort copies into their own folders, add details, mark photos for
-enhancement and download them.
+photos, sort copies into their own folders, add details, turn photos, mark
+photos for restoration and download them.
 
 Live address: **https://gallery.familypreserves.ca**
 
@@ -11,20 +11,19 @@ Live address: **https://gallery.familypreserves.ca**
 ```
 Your PC                         Kamatera server                    Cloudflare R2
 ───────                         ───────────────                    ─────────────
-Orders\FP-1042 Martin\   ──►    gallery app (Node, run by NSSM)    originals (raw scans)
-  Original\Album 1\ …          behind Caddy (HTTPS)               enhanced versions
-  Enhanced\Album 1\ …          SQLite database: orders, folders,  screen-size copies
+Orders\FP-1042 Martin\   ──►    gallery app (Node, run by NSSM)    enhanced photos (+ backs)
+  Album 1\ …                    behind Caddy (HTTPS)               raw scans, as they are
+  Album 1\raw\ …               SQLite database: orders, folders,  screen-size copies
 upload tool (npm run upload)    details, access codes              thumbnails
 ```
 
-- **Your PC**: each order folder has an `Original` folder (the raw scans) and
-  an `Enhanced` folder (the colour-corrected versions), each with the same
-  subfolders: one per album, box or carousel. The upload tool matches every
-  raw scan with its enhanced version, makes thumbnails, uploads everything and
-  creates the gallery. Each subfolder becomes one of the customer's *scanned
-  folders*.
-- **Customers see and sort the enhanced versions.** The raw originals are only
-  stored, for the download.
+- **Your PC**: one folder per order, one subfolder per album, box or carousel.
+  The photos in each subfolder are the enhanced (colour-corrected) versions;
+  `scan001_b.jpg` is the back of `scan001.jpg`. Raw scans sit in a `raw`
+  folder. The upload tool makes thumbnails, uploads everything and creates the
+  gallery. Each subfolder becomes one of the customer's *scanned folders*.
+- **Customers see and sort the enhanced versions**, with the back beside the
+  front. Raw scans are uploaded exactly as they are, only for the download.
 - **The server** holds the database and hands out short-lived links to photos.
 - **Cloudflare R2** stores the photos. Customers load them straight from R2, so
   viewing and downloading don't use the server's bandwidth.
@@ -49,20 +48,20 @@ npm run upload -- "C:\Orders\FP-1042 Martin" --order FP-1042 --title "The Martin
 - If the upload stops (internet drop, PC sleeps), run the same command again.
   Anything already uploaded is skipped.
 - Added more scans later? Put them in the folder and run it again.
-- Lay the order out like this. A raw scan and its enhanced version are matched
-  by subfolder and file name; the extension can differ.
+- Lay the order out like this:
 
   ```
   FP-1042 Martin\
-    Original\Album 1\scan001.tif     raw scan (also .jpg, .png, .dng)
-    Enhanced\Album 1\scan001.jpg     what the customer sees (.jpg, .png, .tif)
+    Album 1\scan001.jpg        enhanced photo (.jpg, .png, .tif)
+    Album 1\scan001_b.jpg      the back of scan001, shown beside it
+    Album 1\raw\…              raw scans: any files, uploaded untouched
   ```
 
-  The tool lists any enhanced photo with no original (it is still uploaded)
-  and any original with no enhanced version (skipped), so you can fix them and
-  run it again. An order folder with no `Original`/`Enhanced` folders is
-  uploaded as enhanced photos only.
-- Photos sitting directly in `Enhanced` go into "Other photos".
+  A `raw` folder can also sit once in the order folder instead of in each
+  album. The tool warns about a `_b` file with no matching front (it is
+  uploaded as its own photo).
+- Photos sitting directly in the order folder go into "Other photos" (or
+  "Photos" when there are no album folders).
 
 Lost the code, or need to cut off access? `npm run reset-code -- FP-1042`
 prints a new code; the old one stops working.
@@ -103,8 +102,8 @@ the upload tool, and sign in as a customer.
    unsaved changes.
 3. Changes saved on the device first and synced in the background, so nothing
    is lost on a bad connection.
-4. Zip downloads: the customer ticks *Originals (raw scans)*, *Enhanced* and any
-   of their custom folders. Custom folders hold enhanced copies; the details
-   are written into the enhanced files, and the raw originals stay exactly as
-   scanned.
+4. Zip downloads: the customer ticks *Raw scans*, *Enhanced* and any of their
+   custom folders. Custom folders hold enhanced copies (with backs). Details and
+   rotation are written into the enhanced files and copies; raw scans are never
+   touched.
 5. Nightly database backup to R2, gallery expiry, small admin page.

@@ -260,56 +260,94 @@ test('scripts and styles are re-checked after updates', async () => {
   assert.match(img.headers.get('cache-control'), /max-age=3600/);
 });
 
-test('pairs each raw original with its enhanced version', async () => {
+test('backs go with their fronts, and raw folders upload untouched', async () => {
   const dir = path.join(tmp, 'FP-3000 Lee');
-  await makeImage(path.join(dir, 'Original', 'Album 1', 'scan1.tif'), 1000, 800, '#776655');
-  await makeImage(path.join(dir, 'Enhanced', 'Album 1', 'scan1.jpg'), 1000, 800, '#998877');
-  await makeImage(path.join(dir, 'Original', 'Album 1', 'Scan2.TIF'), 900, 700, '#665544');
-  await makeImage(path.join(dir, 'Enhanced', 'Album 1', 'scan2.jpg'), 900, 700, '#887766');
-  await makeImage(path.join(dir, 'Enhanced', 'Shoebox', 'loose.jpg'), 600, 400, '#556677'); // no raw
-  await makeImage(path.join(dir, 'Original', 'Shoebox', 'spare.tif'), 600, 400, '#445566'); // no enhanced
+  await makeImage(path.join(dir, 'Album 1', 'scan1.jpg'), 1000, 800, '#998877');
+  await makeImage(path.join(dir, 'Album 1', 'scan1_b.jpg'), 1000, 800, '#ddddcc');
+  await makeImage(path.join(dir, 'Album 1', 'scan2.jpg'), 900, 700, '#887766');
+  await makeImage(path.join(dir, 'Album 1', 'stray_b.jpg'), 600, 400, '#556677'); // no front
+  fs.mkdirSync(path.join(dir, 'Album 1', 'raw'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'Album 1', 'raw', 'scan1.tif'), 'raw front bytes');
+  fs.writeFileSync(path.join(dir, 'Album 1', 'raw', 'notes.xmp'), 'any file in raw is kept');
+  fs.mkdirSync(path.join(dir, 'RAW', 'Box'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'RAW', 'Box', 'b.tif'), 'order-level raw');
 
   const scan = scanOrder(dir);
-  assert.equal(scan.paired, true);
   assert.deepEqual(
-    scan.photos.map((p) => [p.folder, p.filename, p.raw?.filename ?? null]),
+    scan.photos.map((p) => [p.folder, p.filename, p.back?.filename ?? null]),
     [
-      ['Album 1', 'scan1.jpg', 'scan1.tif'],
-      ['Album 1', 'scan2.jpg', 'Scan2.TIF'],
-      ['Shoebox', 'loose.jpg', null],
+      ['Album 1', 'scan1.jpg', 'scan1_b.jpg'],
+      ['Album 1', 'scan2.jpg', null],
+      ['Album 1', 'stray_b.jpg', null],
     ]
   );
-  assert.deepEqual(scan.rawOnly, ['Shoebox/spare.tif']);
+  assert.deepEqual(scan.raws.map((r) => r.path), ['Album 1/raw/notes.xmp', 'Album 1/raw/scan1.tif', 'RAW/Box/b.tif']);
+  assert.match(scan.warnings.join('\n'), /stray_b\.jpg looks like the back/);
 
-  const lines = [];
-  const result = await uploadOrder({ dir, order: 'FP-3000', title: 'Lee', galleryUrl: base, adminToken: ADMIN_TOKEN, log: (l) => lines.push(l) });
+  const result = await uploadOrder({ dir, order: 'FP-3000', title: 'Lee', galleryUrl: base, adminToken: ADMIN_TOKEN, log: quiet });
   assert.equal(result.uploaded, 3);
-  assert.match(lines.join('\n'), /No original \(raw scan\) found for 1/);
-  assert.match(lines.join('\n'), /Shoebox\/spare\.tif/);
+  assert.equal(result.rawUploaded, 3);
+  assert.equal(result.failed.length, 0);
 
-  const rows = db
-    .prepare(`SELECT p.filename, p.enhanced_key, p.raw_filename, p.raw_key, p.raw_bytes FROM photos p
-              JOIN orders o ON o.id = p.order_id WHERE o.code = 'FP-3000' ORDER BY p.filename`)
-    .all();
-  assert.equal(rows.length, 3);
-  assert.match(rows[0].enhanced_key, /^orders\/FP-3000\/enhanced\/[a-f0-9]{64}\.jpg$/);
-  assert.match(rows[1].raw_key, /^orders\/FP-3000\/raw\/[a-f0-9]{64}\.tif$/);
-  assert.equal(rows[1].raw_filename, 'scan1.tif');
-  assert.ok(rows[1].raw_bytes > 0);
-  assert.equal(rows[0].raw_key, null); // loose.jpg
-
-  // The raw file really is stored, byte for byte.
-  const stored = fs.readFileSync(path.join(tmp, 'data', 'files', rows[1].raw_key));
-  assert.ok(stored.equals(fs.readFileSync(path.join(dir, 'Original', 'Album 1', 'scan1.tif'))));
+  const raws = db.prepare(`SELECT r.path, r.key, r.bytes FROM raw_files r JOIN orders o ON o.id = r.order_id WHERE o.code = 'FP-3000' ORDER BY r.path`).all();
+  assert.equal(raws.length, 3);
+  assert.match(raws[1].key, /^orders\/FP-3000\/raw\/[a-f0-9]{64}\.tif$/);
+  assert.equal(fs.readFileSync(path.join(tmp, 'data', 'files', raws[1].key), 'utf8'), 'raw front bytes');
 
   const again = await uploadOrder({ dir, order: 'FP-3000', galleryUrl: base, adminToken: ADMIN_TOKEN, log: quiet });
   assert.equal(again.skipped, 3);
+  assert.equal(again.rawSkipped, 3);
+
+  // The customer sees the back with its photo, and can turn each side.
+  const reset = await fetch(`${base}/api/admin/orders/FP-3000/reset-code`, { method: 'POST', headers: { authorization: `Bearer ${ADMIN_TOKEN}` } });
+  const { accessCode, order } = await reset.json();
+  const slug = order.url.split('/').pop();
+  const signIn = await fetch(`${base}/api/g/${slug}/sign-in`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-forwarded-for': '10.0.0.9' },
+    body: JSON.stringify({ code: accessCode }),
+  });
+  assert.equal(signIn.status, 200);
+  const leeCookie = signIn.headers.get('set-cookie').split(';')[0];
+  const load = async () => (await fetch(`${base}/api/g/${slug}/gallery`, { headers: { cookie: leeCookie } })).json();
+  const data = await load();
+  const [front, plain] = data.photos;
+  assert.equal(front.back.filename, 'scan1_b.jpg');
+  assert.ok(front.back.screen && front.back.thumb);
+  assert.equal(plain.back, null);
+  assert.equal(front.rotation, 0);
+
+  const change = async (changes) =>
+    (await (await fetch(`${base}/api/g/${slug}/changes`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: leeCookie },
+      body: JSON.stringify({ changes }),
+    })).json()).results;
+  const results = await change([
+    { op: 'photo.rotate', photoId: front.id, side: 'front', degrees: 90 },
+    { op: 'photo.rotate', photoId: front.id, side: 'back', degrees: 270 },
+    { op: 'photo.rotate', photoId: plain.id, side: 'back', degrees: 90 },
+    { op: 'photo.rotate', photoId: plain.id, side: 'front', degrees: 45 },
+  ]);
+  assert.deepEqual(results.map((r) => r.ok), [true, true, false, false]);
+  const after = await load();
+  assert.equal(after.photos[0].rotation, 90);
+  assert.equal(after.photos[0].back.rotation, 270);
+
+  // Re-running the upload keeps the customer's turns.
+  await uploadOrder({ dir, order: 'FP-3000', galleryUrl: base, adminToken: ADMIN_TOKEN, log: quiet });
+  const kept = await load();
+  assert.equal(kept.photos[0].rotation, 90);
+  assert.equal(kept.photos[0].back.rotation, 270);
 });
 
-test('an Original folder without an Enhanced folder is refused', () => {
-  const dir = path.join(tmp, 'FP-3001');
-  fs.mkdirSync(path.join(dir, 'Original', 'Album'), { recursive: true });
-  assert.throws(() => scanOrder(dir), /no "Enhanced" folder/);
+test('raw file paths cannot climb out of the order', async () => {
+  const res = await fetch(`${base}/api/admin/orders/FP-3000/raw-files`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${ADMIN_TOKEN}` },
+    body: JSON.stringify({ files: [{ path: '../x.tif', sha256: 'a'.repeat(64), bytes: 1, key: `orders/FP-3000/raw/${'a'.repeat(64)}.tif` }] }),
+  });
+  assert.equal(res.status, 400);
 });
 
 test('a version 1 database upgrades and keeps its photos', () => {
@@ -324,8 +362,8 @@ test('a version 1 database upgrades and keeps its photos', () => {
             VALUES (1, 1, 'a.jpg', 'abc', 1, 'orders/FP-1/original/abc.jpg', 's', 't');`);
   old.close();
   const upgraded = openDb(dir);
-  const row = upgraded.prepare('SELECT enhanced_key, raw_key FROM photos').get();
-  assert.deepEqual({ ...row }, { enhanced_key: 'orders/FP-1/original/abc.jpg', raw_key: null });
+  const row = upgraded.prepare('SELECT enhanced_key, rotation FROM photos').get();
+  assert.deepEqual({ ...row }, { enhanced_key: 'orders/FP-1/original/abc.jpg', rotation: 0 });
   assert.equal(upgraded.pragma('user_version', { simple: true }), MIGRATIONS.length);
   upgraded.close();
 });
