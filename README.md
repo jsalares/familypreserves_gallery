@@ -100,8 +100,9 @@ the upload tool, and sign in as a customer.
    (year, place, event, people, caption), Enhance. Changes save in the
    background and retry on their own; the page warns before closing with
    unsaved changes.
-3. Changes saved on the device first and synced in the background, so nothing
-   is lost on a bad connection.
+3. **Done:** changes are kept on the customer's device until the server has
+   them, so closing the tab, losing signal or a flat battery loses nothing;
+   they are sent on the next visit. Undo button (and Ctrl+Z) for recent edits.
 4. Zip downloads: the customer ticks *Raw scans*, *Enhanced* and any of their
    custom folders. Custom folders hold enhanced copies (with backs). Details and
    rotation are written into the enhanced files and copies; raw scans are never
