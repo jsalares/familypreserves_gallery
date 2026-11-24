@@ -65,7 +65,7 @@ test('finds photos in natural order and ignores other files', () => {
   assert.deepEqual(found, ['Album 1/scan2.jpg', 'Album 1/scan10.jpg', 'Other photos/loose.jpg', 'Shoebox/old.jpg']);
 });
 
-let access;
+let access, cookie, apiBase;
 
 test('admin API refuses a wrong token', async () => {
   const res = await fetch(`${base}/api/admin/orders`, {
@@ -106,7 +106,7 @@ test('the gallery asks for the code, then shows the photos', async () => {
   assert.match(await page.text(), /Access code/);
 
   const slug = access.url.split('/').pop();
-  const apiBase = `${base}/api/g/${slug}`;
+  apiBase = `${base}/api/g/${slug}`;
   assert.equal((await fetch(`${apiBase}/gallery`)).status, 401);
 
   const wrong = await fetch(`${apiBase}/sign-in`, {
@@ -122,7 +122,7 @@ test('the gallery asks for the code, then shows the photos', async () => {
     body: JSON.stringify({ code: access.accessCode.toLowerCase() }),
   });
   assert.equal(right.status, 200);
-  const cookie = right.headers.get('set-cookie').split(';')[0];
+  cookie = right.headers.get('set-cookie').split(';')[0];
   assert.match(right.headers.get('set-cookie'), /HttpOnly/);
 
   const galleryPage = await fetch(access.url, { headers: { cookie } });
@@ -147,6 +147,86 @@ test('the gallery asks for the code, then shows the photos', async () => {
 
   // A file link without its signature is refused.
   assert.equal((await fetch(big.thumb.split('?')[0])).status, 403);
+});
+
+const send = (changes, withCookie = true) =>
+  fetch(`${apiBase}/changes`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...(withCookie ? { cookie } : {}) },
+    body: JSON.stringify({ changes }),
+  });
+const gallery = async () => (await fetch(`${apiBase}/gallery`, { headers: { cookie } })).json();
+
+test('customers can sort photos into custom folders and add details', async () => {
+  assert.equal((await send([{ op: 'folder.create', name: 'Christmas' }], false)).status, 401);
+
+  const before = await gallery();
+  const [a, b, c] = before.photos.map((p) => p.id);
+  const changes = [
+    { op: 'folder.create', name: '  Christmas  ' },
+    { op: 'photo.folder', photoId: a, name: 'Christmas', on: true },
+    { op: 'photo.folder', photoId: a, name: 'Christmas', on: true }, // repeat is harmless
+    { op: 'photo.folder', photoId: b, name: 'Cottage', on: true }, // creates the folder
+    { op: 'photo.folder', photoId: c, name: 'Christmas', on: true },
+    { op: 'photo.folder', photoId: c, name: 'Christmas', on: false },
+    { op: 'photo.person', photoId: a, name: 'Grandma Rose', on: true },
+    { op: 'photo.person', photoId: b, name: 'Grandma Rose', on: true },
+    { op: 'photo.person', photoId: b, name: 'Uncle Pete', on: true },
+    { op: 'photo.person', photoId: b, name: 'Uncle Pete', on: false },
+    { op: 'photo.field', photoId: a, field: 'year', value: ' 1985 ' },
+    { op: 'photo.field', photoId: a, field: 'caption', value: 'First snow' },
+    { op: 'photo.field', photoId: a, field: 'owner', value: 'x' },
+    { op: 'photo.enhance', photoId: b, on: true },
+    { op: 'photo.folder', photoId: 999999, name: 'Christmas', on: true },
+  ];
+  const { results } = await (await send(changes)).json();
+  assert.equal(results.length, changes.length);
+  assert.deepEqual(
+    results.map((r) => r.ok),
+    [true, true, true, true, true, true, true, true, true, true, true, true, false, true, false]
+  );
+
+  const after = await gallery();
+  assert.deepEqual(after.customFolders, ['Christmas', 'Cottage']);
+  assert.deepEqual(after.people, ['Grandma Rose', 'Uncle Pete']);
+  const byId = new Map(after.photos.map((p) => [p.id, p]));
+  assert.deepEqual(byId.get(a).customFolders, ['Christmas']);
+  assert.deepEqual(byId.get(b).customFolders, ['Cottage']);
+  assert.deepEqual(byId.get(c).customFolders, []);
+  assert.deepEqual(byId.get(a).people, ['Grandma Rose']);
+  assert.deepEqual(byId.get(b).people, ['Grandma Rose']);
+  assert.equal(byId.get(a).year, '1985');
+  assert.equal(byId.get(a).caption, 'First snow');
+  assert.equal(byId.get(b).enhance, true);
+  assert.equal(byId.get(a).enhance, false);
+
+  // Deleting a custom folder removes the copies, never the photos.
+  await send([{ op: 'folder.delete', name: 'Christmas' }]);
+  const later = await gallery();
+  assert.deepEqual(later.customFolders, ['Cottage']);
+  assert.equal(later.photos.length, 4);
+  assert.deepEqual(later.photos.find((p) => p.id === a).customFolders, []);
+});
+
+test('custom folders stop at eight, and other galleries are off limits', async () => {
+  const names = Array.from({ length: 9 }, (_, i) => `Folder ${i + 1}`);
+  const { results } = await (await send(names.map((name) => ({ op: 'folder.create', name })))).json();
+  // "Cottage" already exists, so seven more fit.
+  assert.deepEqual(results.map((r) => r.ok), [true, true, true, true, true, true, true, false, false]);
+  assert.match(results[7].error, /up to 8/);
+  assert.equal((await gallery()).customFolders.length, 8);
+
+  const tooMany = await send(Array.from({ length: 201 }, () => ({ op: 'folder.create', name: 'x' })));
+  assert.equal(tooMany.status, 400);
+
+  // A second order's photo cannot be changed from this gallery.
+  const other = path.join(tmp, 'FP-2000');
+  await makeImage(path.join(other, 'Box', 'a.jpg'), 400, 300, '#888888');
+  await uploadOrder({ dir: other, order: 'FP-2000', title: 'Other', galleryUrl: base, adminToken: ADMIN_TOKEN, log: quiet });
+  const ids = new Set((await gallery()).photos.map((p) => p.id));
+  const foreignId = Math.max(...ids) + 1;
+  const res = await (await send([{ op: 'photo.enhance', photoId: foreignId, on: true }])).json();
+  assert.equal(res.results[0].ok, false);
 });
 
 test('wrong codes lock the gallery for that address after five tries', async () => {
