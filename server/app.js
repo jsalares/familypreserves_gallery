@@ -52,7 +52,17 @@ export function createApp(config) {
   });
 
   if (storage.kind === 'local') storage.routes(app);
-  app.use('/assets', express.static(path.join(publicDir, 'assets'), { maxAge: '1h' }));
+  // Scripts and styles change with each update, so browsers re-check them every
+  // time (a quick "not modified" when unchanged). Images can be kept for an hour.
+  app.use(
+    '/assets',
+    express.static(path.join(publicDir, 'assets'), {
+      maxAge: '1h',
+      setHeaders: (res, file) => {
+        if (/\.(js|css)$/.test(file)) res.set('Cache-Control', 'no-cache');
+      },
+    })
+  );
   app.get('/healthz', (req, res) => res.json({ ok: true }));
 
   const galleryUrl = (order) => `${config.publicUrl}/g/${order.slug}`;
