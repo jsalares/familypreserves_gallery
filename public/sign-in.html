@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Your photos · Family Preserves</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&amp;family=Source+Sans+3:wght@400;600;700&amp;display=swap">
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <img src="/assets/jar.png" alt="">
+    <div><span class="brand-name serif">Family Preserves</span><span class="brand-tag">Preserve · Enhance · Relive</span></div>
+  </div>
+</header>
+<main>
+  <form class="signin" id="signin" novalidate>
+    <h1 class="serif">Welcome</h1>
+    <p>Enter the access code from your Family Preserves card or email to see your photos.</p>
+    <label for="code">Access code</label>
+    <input id="code" name="code" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" placeholder="PINE-4821" required>
+    <button class="btn" type="submit">See my photos</button>
+    <p class="message" id="message" role="alert"></p>
+  </form>
+</main>
+<script src="/assets/sign-in.js"></script>
+</body>
+</html>
