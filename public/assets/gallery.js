@@ -42,6 +42,7 @@ const S = {
   mode: 'photo', // photo | grid
   sort: 'scan',
   openId: null,
+  keepId: null, // a just-filed photo that stays on screen until the customer moves on
   barOpen: true,
   confirmDelete: false,
   folderDraft: '',
@@ -55,7 +56,7 @@ function visiblePhotos() {
   let list = S.photos.filter((p) => {
     if (v.kind === 'source' && p.folder !== v.name) return false;
     if (v.kind === 'folder' && !inFolder(p, v.name)) return false;
-    if (S.onlyUnfiled && v.kind !== 'folder' && p.customFolders.length > 0) return false;
+    if (S.onlyUnfiled && v.kind !== 'folder' && p.customFolders.length > 0 && !(p.id === S.keepId && p.id === S.openId)) return false;
     return true;
   });
   const year = (p) => {
@@ -200,9 +201,12 @@ function showNotice(message) {
 
 function toggleFolder(photo, name) {
   const on = !inFolder(photo, name);
-  // Filing a photo while "only show unfiled" is on: move on to the next one.
-  if (on && S.onlyUnfiled && S.view.kind !== 'folder' && photo.customFolders.length === 0 && S.mode === 'photo') {
-    stepFrom(photo, 1);
+  // With "only show photos not in a custom folder" on, the photo stays on
+  // screen after it is filed, so it can go in more than one folder. It drops
+  // out of the list once the customer moves to another photo.
+  if (on && S.mode === 'photo') {
+    S.openId = photo.id;
+    S.keepId = photo.id;
   }
   photo.customFolders = on
     ? S.custom.filter((f) => f === name || photo.customFolders.includes(f))
