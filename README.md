@@ -80,8 +80,10 @@ the upload tool, and sign in as a customer.
 ## Roadmap
 
 1. **Done:** database, access-code sign-in, upload tool, simple gallery.
-2. The full sorting screen from the prototype: custom folders, details
-   (year, place, event, people, caption), Enhance.
+2. **Done:** the full sorting screen from the prototype: custom folders, details
+   (year, place, event, people, caption), Enhance. Changes save in the
+   background and retry on their own; the page warns before closing with
+   unsaved changes.
 3. Changes saved on the device first and synced in the background, so nothing
    is lost on a bad connection.
 4. Zip downloads of chosen folders, with details written into each photo.

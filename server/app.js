@@ -3,6 +3,7 @@ import path from 'node:path';
 import express from 'express';
 import { openDb, createQueries } from './db.js';
 import { createStorage, assertSafeKey } from './storage.js';
+import { createChangeHandler, loadOrganizing, MAX_CHANGES_PER_REQUEST, MAX_CUSTOM_FOLDERS } from './changes.js';
 import {
   generateAccessCode,
   hashAccessCode,
@@ -25,6 +26,7 @@ export function createApp(config) {
   const q = createQueries(db);
   const storage = createStorage(config);
   const limiter = createLimiter();
+  const applyChanges = createChangeHandler(db);
   const secureCookies = config.publicUrl.startsWith('https://');
   const publicDir = path.join(config.root, 'public');
 
@@ -217,11 +219,25 @@ export function createApp(config) {
     res.set('Set-Cookie', `${sessionCookieName(order.id)}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`).json({ ok: true });
   });
 
-  app.get('/api/g/:slug/gallery', async (req, res) => {
+  // Signed-in customer for this gallery, or an error response.
+  const customerOrder = (req, res) => {
     const order = loadOrder(req);
-    if (!order || isExpired(order)) return res.status(404).json({ error: 'This gallery could not be found.' });
-    if (!signedIn(req, order)) return res.status(401).json({ error: 'Please enter your access code.' });
+    if (!order || isExpired(order)) {
+      res.status(404).json({ error: 'This gallery could not be found.' });
+      return null;
+    }
+    if (!signedIn(req, order)) {
+      res.status(401).json({ error: 'Please enter your access code.' });
+      return null;
+    }
+    return order;
+  };
+
+  app.get('/api/g/:slug/gallery', async (req, res) => {
+    const order = customerOrder(req, res);
+    if (!order) return;
     const rows = q.photosForOrder.all(order.id);
+    const org = loadOrganizing(db, order.id);
     const photos = await Promise.all(
       rows.map(async (p) => ({
         id: p.id,
@@ -231,13 +247,38 @@ export function createApp(config) {
         height: p.height,
         thumb: await storage.viewUrl(p.thumb_key),
         screen: await storage.viewUrl(p.screen_key),
+        customFolders: org.foldersByPhoto.get(p.id) || [],
+        people: org.peopleByPhoto.get(p.id) || [],
+        year: p.year || '',
+        place: p.place || '',
+        event: p.event || '',
+        caption: p.caption || '',
+        enhance: Boolean(p.enhance),
       }))
     );
     const folders = q.sourceFolders.all(order.id).map((f) => ({
       name: f.name,
       count: rows.filter((p) => p.source_folder_id === f.id).length,
     }));
-    res.set('Cache-Control', 'no-store').json({ order: { code: order.code, title: order.title }, folders, photos });
+    res.set('Cache-Control', 'no-store').json({
+      order: { code: order.code, title: order.title },
+      folders,
+      customFolders: org.customFolders,
+      people: org.people,
+      maxCustomFolders: MAX_CUSTOM_FOLDERS,
+      photos,
+    });
+  });
+
+  // A batch of customer edits, applied in order. See server/changes.js.
+  app.post('/api/g/:slug/changes', (req, res) => {
+    const order = customerOrder(req, res);
+    if (!order) return;
+    const changes = Array.isArray(req.body?.changes) ? req.body.changes : null;
+    if (!changes || changes.length > MAX_CHANGES_PER_REQUEST) {
+      return res.status(400).json({ error: `Send up to ${MAX_CHANGES_PER_REQUEST} changes at a time.` });
+    }
+    res.json({ results: applyChanges(order.id, changes) });
   });
 
   app.use((req, res) => page(res, 'not-found.html', 404));
