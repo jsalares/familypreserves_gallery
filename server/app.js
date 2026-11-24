@@ -134,14 +134,19 @@ export function createApp(config) {
     }
   });
 
-  // Record uploaded photos. Safe to repeat: a photo is matched by its original
-  // folder and filename.
+  // Record uploaded photos. Safe to repeat: a photo is matched by its scanned
+  // folder and filename. Each photo is the enhanced file customers see, plus
+  // (usually) the raw scan it was made from, which is only used for downloads.
   admin.post('/orders/:code/photos', (req, res) => {
     const order = findOrder(req, res);
     if (!order) return;
     const photos = Array.isArray(req.body?.photos) ? req.body.photos : [];
     if (photos.length === 0 || photos.length > MAX_BATCH) return res.status(400).json({ error: `Send 1 to ${MAX_BATCH} photos.` });
     const prefix = `orders/${order.code}/`;
+    const checkKey = (k) => {
+      assertSafeKey(k);
+      if (!k.startsWith(prefix)) throw new Error(`Key must start with ${prefix}`);
+    };
     try {
       db.transaction(() => {
         for (const p of photos) {
@@ -149,9 +154,14 @@ export function createApp(config) {
           const filename = String(p.filename || '').trim();
           if (!folder || !filename || folder.length > 200 || filename.length > 255) throw new Error('Each photo needs a folder and filename.');
           if (!SHA256.test(String(p.sha256))) throw new Error(`Bad checksum for ${filename}.`);
-          for (const k of [p.originalKey, p.screenKey, p.thumbKey]) {
-            assertSafeKey(k);
-            if (!k.startsWith(prefix)) throw new Error(`Key must start with ${prefix}`);
+          const enhancedKey = p.enhancedKey ?? p.originalKey; // older upload tools sent originalKey
+          for (const k of [enhancedKey, p.screenKey, p.thumbKey]) checkKey(k);
+          const raw = p.raw || null;
+          if (raw) {
+            const rawName = String(raw.filename || '').trim();
+            if (!rawName || rawName.length > 255) throw new Error(`The original of ${filename} needs a filename.`);
+            if (!SHA256.test(String(raw.sha256))) throw new Error(`Bad checksum for the original of ${filename}.`);
+            checkKey(raw.key);
           }
           let sf = q.sourceFolder.get(order.id, folder);
           if (!sf) sf = { id: q.insertSourceFolder.run(order.id, folder).lastInsertRowid };
@@ -163,9 +173,13 @@ export function createApp(config) {
             bytes: Number(p.bytes) || 0,
             width: Number(p.width) || null,
             height: Number(p.height) || null,
-            original_key: p.originalKey,
+            enhanced_key: enhancedKey,
             screen_key: p.screenKey,
             thumb_key: p.thumbKey,
+            raw_filename: raw ? String(raw.filename).trim() : null,
+            raw_sha256: raw ? raw.sha256 : null,
+            raw_bytes: raw ? Number(raw.bytes) || 0 : null,
+            raw_key: raw ? raw.key : null,
           });
         }
         q.renumber(order.id);

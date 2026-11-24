@@ -4,7 +4,7 @@ import Database from 'better-sqlite3';
 
 // Each entry upgrades the database by one version. Never edit a shipped entry;
 // add a new one instead.
-const MIGRATIONS = [
+export const MIGRATIONS = [
   `
   CREATE TABLE orders (
     id            INTEGER PRIMARY KEY,
@@ -16,7 +16,8 @@ const MIGRATIONS = [
     created_at    TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
-  -- Original folders, exactly as scanned. Customers can read but never change them.
+  -- Scanned folders (albums, boxes), as Jason organised the scans. Customers
+  -- can read but never change them.
   CREATE TABLE source_folders (
     id        INTEGER PRIMARY KEY,
     order_id  INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
@@ -79,6 +80,16 @@ const MIGRATIONS = [
 
   CREATE INDEX photos_by_order ON photos (order_id, source_folder_id, position);
   `,
+  // 2: each photo is a pair. The file customers see is the ENHANCED version
+  // (colour corrected); the raw scan is the ORIGINAL, kept only for download.
+  // What version 1 called original_key was always the file customers saw.
+  `
+  ALTER TABLE photos RENAME COLUMN original_key TO enhanced_key;
+  ALTER TABLE photos ADD COLUMN raw_filename TEXT;
+  ALTER TABLE photos ADD COLUMN raw_sha256 TEXT;
+  ALTER TABLE photos ADD COLUMN raw_bytes INTEGER;
+  ALTER TABLE photos ADD COLUMN raw_key TEXT;
+  `,
 ];
 
 export function openDb(dataDir) {
@@ -119,13 +130,17 @@ export function createQueries(db) {
     setSourceFolderPosition: db.prepare('UPDATE source_folders SET position = ? WHERE id = ?'),
     upsertPhoto: db.prepare(`
       INSERT INTO photos (order_id, source_folder_id, filename, sha256, bytes, width, height,
-                          original_key, screen_key, thumb_key)
+                          enhanced_key, screen_key, thumb_key,
+                          raw_filename, raw_sha256, raw_bytes, raw_key)
       VALUES (@order_id, @source_folder_id, @filename, @sha256, @bytes, @width, @height,
-              @original_key, @screen_key, @thumb_key)
+              @enhanced_key, @screen_key, @thumb_key,
+              @raw_filename, @raw_sha256, @raw_bytes, @raw_key)
       ON CONFLICT (order_id, source_folder_id, filename) DO UPDATE SET
         sha256 = excluded.sha256, bytes = excluded.bytes, width = excluded.width,
-        height = excluded.height, original_key = excluded.original_key,
-        screen_key = excluded.screen_key, thumb_key = excluded.thumb_key
+        height = excluded.height, enhanced_key = excluded.enhanced_key,
+        screen_key = excluded.screen_key, thumb_key = excluded.thumb_key,
+        raw_filename = excluded.raw_filename, raw_sha256 = excluded.raw_sha256,
+        raw_bytes = excluded.raw_bytes, raw_key = excluded.raw_key
     `),
     photosInFolder: db.prepare('SELECT id, filename FROM photos WHERE source_folder_id = ?'),
     setPhotoPosition: db.prepare('UPDATE photos SET position = ? WHERE id = ?'),

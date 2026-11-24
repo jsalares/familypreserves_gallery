@@ -80,7 +80,7 @@ function visiblePhotos() {
 
 function viewTitle() {
   const v = S.view;
-  let t = v.kind === 'all' ? 'All photos' : v.kind === 'source' ? `${v.name} (original)` : v.name;
+  let t = v.kind === 'all' ? 'All photos' : v.kind === 'source' ? `${v.name} (scanned folder)` : v.name;
   if (S.onlyUnfiled && v.kind !== 'folder') t += ', not in a custom folder';
   return t;
 }
@@ -285,8 +285,8 @@ function renderShelves() {
     </div>`;
   if (S.barOpen) {
     html += `<div id="shelf-body" class="shelves-inner shelf-body">
-      <div class="shelf" role="group" aria-label="Original folders">
-        <span class="shelf-label">Originals</span>
+      <div class="shelf" role="group" aria-label="Scanned folders">
+        <span class="shelf-label">Scanned folders</span>
         ${chip('chip-source', 'view-all', 'All', S.photos.length, v.kind === 'all')}
         ${S.sources
           .map((f) => chip('chip-source', 'view-source', f.name, f.count, v.kind === 'source' && v.name === f.name, `data-name="${esc(f.name)}"`))
@@ -321,10 +321,10 @@ function renderShelves() {
 function renderBanner() {
   const v = S.view;
   if (v.kind === 'source') {
-    return `<section class="banner banner-original" aria-label="You are viewing an original folder">
+    return `<section class="banner banner-original" aria-label="You are viewing a scanned folder">
       ${ICON.folder()}
       <div class="banner-text">
-        <span class="kicker">${ICON.lock} Original folder · as scanned</span>
+        <span class="kicker">${ICON.lock} Scanned folder · as we received them</span>
         <span class="name serif">${esc(v.name)}</span>
         <span class="sub">These photos stay here permanently. Copy them into your custom folders and add details as you go.</span>
       </div>
@@ -333,7 +333,7 @@ function renderBanner() {
   if (v.kind === 'folder') {
     const n = S.photos.filter((p) => inFolder(p, v.name)).length;
     const actions = S.confirmDelete
-      ? `<span class="q" role="alert">Delete “${esc(v.name)}” and its ${plural(n, 'copy', 'copies')}? Your originals are not affected.</span>
+      ? `<span class="q" role="alert">Delete “${esc(v.name)}” and its ${plural(n, 'copy', 'copies')}? The photos stay in your scanned folders.</span>
          <button type="button" class="btn-light" data-act="delete-folder">Yes, delete</button>
          <button type="button" class="btn-outline-light" data-act="cancel-delete">Cancel</button>`
       : `<button type="button" class="btn-outline-light" data-act="ask-delete">${ICON.trash} Delete this folder</button>`;
@@ -342,7 +342,7 @@ function renderBanner() {
       <div class="banner-text">
         <span class="kicker">Custom folder · copies</span>
         <span class="name serif">${esc(v.name)}</span>
-        <span class="sub">Removing a photo here only removes this copy. The original stays safe.</span>
+        <span class="sub">Removing a photo here only removes this copy. It stays in its scanned folder.</span>
       </div>
       <div class="banner-actions">${actions}</div>
     </section>`;
@@ -388,12 +388,12 @@ function renderViewer(list) {
   S.openId = p.id;
   const enhancedCount = S.photos.filter((x) => x.enhance).length;
   const where = p.customFolders.length
-    ? `Edits here update the original in ${p.folder} and its copies in ${p.customFolders.join(', ')}.`
-    : `Edits here update the original in ${p.folder}, and any copies you make later.`;
+    ? `Edits here apply to this photo in ${p.folder} and its copies in ${p.customFolders.join(', ')}.`
+    : `Edits here apply to this photo in ${p.folder}, and any copies you make later.`;
   const removeFrom = S.view.kind === 'folder' ? S.view.name : null;
 
   return `<div class="viewer-nav">
-      <span>${esc(p.filename)} · Original folder: <strong>${esc(p.folder)}</strong></span>
+      <span>${esc(p.filename)} · Scanned folder: <strong>${esc(p.folder)}</strong></span>
       <span class="arrows">${i + 1} of ${list.length}
         <button type="button" class="round" data-act="prev" aria-label="Previous photo">${ICON.left}</button>
         <button type="button" class="round primary" data-act="next" aria-label="Next photo">${ICON.right}</button>

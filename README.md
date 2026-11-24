@@ -11,15 +11,20 @@ Live address: **https://gallery.familypreserves.ca**
 ```
 Your PC                         Kamatera server                    Cloudflare R2
 ───────                         ───────────────                    ─────────────
-Orders\FP-1042 Martin\   ──►    gallery app (Node, run by NSSM)    original scans
-  Album 1\ …                    behind Caddy (HTTPS)               screen-size copies
-  Shoebox\ …                    SQLite database: orders, folders,  thumbnails
-upload tool (npm run upload)    details, access codes
+Orders\FP-1042 Martin\   ──►    gallery app (Node, run by NSSM)    originals (raw scans)
+  Original\Album 1\ …          behind Caddy (HTTPS)               enhanced versions
+  Enhanced\Album 1\ …          SQLite database: orders, folders,  screen-size copies
+upload tool (npm run upload)    details, access codes              thumbnails
 ```
 
-- **Your PC**: you scan into one folder per order, one subfolder per album, box
-  or carousel. The upload tool makes thumbnails, uploads everything and creates
-  the gallery. Each subfolder becomes one of the customer's *Original folders*.
+- **Your PC**: each order folder has an `Original` folder (the raw scans) and
+  an `Enhanced` folder (the colour-corrected versions), each with the same
+  subfolders: one per album, box or carousel. The upload tool matches every
+  raw scan with its enhanced version, makes thumbnails, uploads everything and
+  creates the gallery. Each subfolder becomes one of the customer's *scanned
+  folders*.
+- **Customers see and sort the enhanced versions.** The raw originals are only
+  stored, for the download.
 - **The server** holds the database and hands out short-lived links to photos.
 - **Cloudflare R2** stores the photos. Customers load them straight from R2, so
   viewing and downloading don't use the server's bandwidth.
@@ -44,8 +49,20 @@ npm run upload -- "C:\Orders\FP-1042 Martin" --order FP-1042 --title "The Martin
 - If the upload stops (internet drop, PC sleeps), run the same command again.
   Anything already uploaded is skipped.
 - Added more scans later? Put them in the folder and run it again.
-- Photos: `.jpg`, `.jpeg`, `.png`, `.tif`, `.tiff`. Other files are ignored.
-  Photos sitting directly in the order folder go into "Other photos".
+- Lay the order out like this. A raw scan and its enhanced version are matched
+  by subfolder and file name; the extension can differ.
+
+  ```
+  FP-1042 Martin\
+    Original\Album 1\scan001.tif     raw scan (also .jpg, .png, .dng)
+    Enhanced\Album 1\scan001.jpg     what the customer sees (.jpg, .png, .tif)
+  ```
+
+  The tool lists any enhanced photo with no original (it is still uploaded)
+  and any original with no enhanced version (skipped), so you can fix them and
+  run it again. An order folder with no `Original`/`Enhanced` folders is
+  uploaded as enhanced photos only.
+- Photos sitting directly in `Enhanced` go into "Other photos".
 
 Lost the code, or need to cut off access? `npm run reset-code -- FP-1042`
 prints a new code; the old one stops working.
@@ -86,5 +103,8 @@ the upload tool, and sign in as a customer.
    unsaved changes.
 3. Changes saved on the device first and synced in the background, so nothing
    is lost on a bad connection.
-4. Zip downloads of chosen folders, with details written into each photo.
+4. Zip downloads: the customer ticks *Originals (raw scans)*, *Enhanced* and any
+   of their custom folders. Custom folders hold enhanced copies; the details
+   are written into the enhanced files, and the raw originals stay exactly as
+   scanned.
 5. Nightly database backup to R2, gallery expiry, small admin page.

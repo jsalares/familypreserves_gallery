@@ -9,7 +9,7 @@ import { sign, unsign } from './auth.js';
 const VIEW_LINK_SECONDS = 6 * 3600; // thumbnails and screen copies
 const UPLOAD_LINK_SECONDS = 2 * 3600;
 
-// Keys look like orders/FP-1042/original/Album 1/scan0140.jpg. Folder and file
+// Keys look like orders/FP-1042/enhanced/<sha256>.jpg. Folder and file
 // names come from Jason's PC, so refuse anything that could escape the order.
 export function assertSafeKey(key) {
   if (typeof key !== 'string' || key.length === 0 || key.length > 1024) throw new Error('Bad storage key');

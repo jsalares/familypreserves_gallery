@@ -3,9 +3,16 @@
 //
 //   npm run upload -- "C:\Orders\FP-1042 Martin" --order FP-1042 --title "The Martin Family Collection"
 //
-// Each subfolder becomes one of the customer's Original folders. Safe to run
-// again: anything already uploaded is skipped, so an interrupted upload just
-// picks up where it stopped.
+// The order folder holds two matching trees:
+//
+//   FP-1042 Martin\Original\Album 1\scan001.tif   (raw scan, kept for download)
+//   FP-1042 Martin\Enhanced\Album 1\scan001.jpg   (what the customer sees)
+//
+// A raw scan and its enhanced version are matched by folder and file name,
+// ignoring the extension. Each folder (Album 1) becomes one of the customer's
+// scanned folders. An order folder without Original/Enhanced is treated as
+// enhanced photos with no raw scans. Safe to run again: anything already
+// uploaded is skipped, so an interrupted upload picks up where it stopped.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -21,6 +28,10 @@ const IMAGE_TYPES = {
   '.tif': 'image/tiff',
   '.tiff': 'image/tiff',
 };
+// Raw scans are never resized, so they can also be formats sharp can't read.
+const RAW_TYPES = { ...IMAGE_TYPES, '.dng': 'image/x-adobe-dng' };
+const ORIGINAL_DIR = /^(original|originals|raw)$/i;
+const ENHANCED_DIR = /^enhanced$/i;
 const SCREEN_EDGE = 2048; // what customers browse
 const THUMB_EDGE = 480; // grid and filmstrip
 const LOOSE_FOLDER = 'Other photos'; // for files sitting directly in the order folder
@@ -31,23 +42,64 @@ const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' })
 
 // ------------------------------------------------------------------ scanning
 
-export function findPhotos(orderDir) {
+function listImages(root, types) {
   const found = [];
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       if (entry.name.startsWith('.')) continue;
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(full);
-      else if (IMAGE_TYPES[path.extname(entry.name).toLowerCase()]) {
-        const rel = path.relative(orderDir, path.dirname(full));
+      else if (types[path.extname(entry.name).toLowerCase()]) {
+        const rel = path.relative(root, path.dirname(full));
         // Nested folders are flattened into one name: "Album 1 - Page 2".
         const folder = rel === '' ? LOOSE_FOLDER : rel.split(path.sep).join(' - ');
         found.push({ file: full, folder, filename: entry.name });
       }
     }
   };
-  walk(orderDir);
-  return found.sort((a, b) => collator.compare(a.folder, b.folder) || collator.compare(a.filename, b.filename));
+  walk(root);
+  return found;
+}
+
+const matchKey = (item) => `${item.folder}\u0000${path.parse(item.filename).name}`.toLowerCase();
+
+// Finds the photos in an order folder and pairs each enhanced file with its
+// raw scan. Returns { paired, photos, rawOnly, duplicates }.
+export function scanOrder(orderDir) {
+  const subdirs = fs.readdirSync(orderDir, { withFileTypes: true }).filter((e) => e.isDirectory());
+  const enhancedDir = subdirs.find((e) => ENHANCED_DIR.test(e.name));
+  const originalDir = subdirs.find((e) => ORIGINAL_DIR.test(e.name));
+  const sort = (list) => list.sort((a, b) => collator.compare(a.folder, b.folder) || collator.compare(a.filename, b.filename));
+
+  if (!enhancedDir) {
+    if (originalDir) throw new Error(`Found an "${originalDir.name}" folder but no "Enhanced" folder next to it.`);
+    return { paired: false, photos: sort(listImages(orderDir, IMAGE_TYPES)).map((p) => ({ ...p, raw: null })), rawOnly: [], duplicates: [] };
+  }
+
+  const raws = new Map();
+  const duplicates = [];
+  if (originalDir) {
+    for (const r of listImages(path.join(orderDir, originalDir.name), RAW_TYPES)) {
+      const k = matchKey(r);
+      if (raws.has(k)) duplicates.push(`${r.folder}/${r.filename}`);
+      else raws.set(k, r);
+    }
+  }
+  const seen = new Set();
+  const photos = sort(listImages(path.join(orderDir, enhancedDir.name), IMAGE_TYPES)).map((p) => {
+    const k = matchKey(p);
+    if (seen.has(k)) duplicates.push(`${p.folder}/${p.filename}`);
+    seen.add(k);
+    const raw = raws.get(k) || null;
+    raws.delete(k);
+    return { ...p, raw: raw && { file: raw.file, filename: raw.filename } };
+  });
+  const rawOnly = sort([...raws.values()]).map((r) => `${r.folder}/${r.filename}`);
+  return { paired: true, photos, rawOnly, duplicates };
+}
+
+export function findPhotos(orderDir) {
+  return scanOrder(orderDir).photos;
 }
 
 // ---------------------------------------------------------------- talking to the app
@@ -98,9 +150,21 @@ export async function uploadOrder({ dir, order, title, galleryUrl, adminToken, l
     log(`\nAdding to existing gallery ${code}: ${created.order.url}\n`);
   }
 
-  const photos = findPhotos(dir);
+  const scan = scanOrder(dir);
+  const { photos } = scan;
   if (photos.length === 0) throw new Error('No photos found (looking for .jpg, .jpeg, .png, .tif, .tiff).');
-  log(`Found ${photos.length} photos in ${new Set(photos.map((p) => p.folder)).size} folders.\n`);
+  if (scan.duplicates.length) {
+    throw new Error(`These share a name with another file in the same folder (only the extension differs), so they can't be matched:\n  ${scan.duplicates.join('\n  ')}`);
+  }
+  log(`Found ${photos.length} photos in ${new Set(photos.map((p) => p.folder)).size} folders.`);
+  if (scan.paired) {
+    const noRaw = photos.filter((p) => !p.raw).map((p) => `${p.folder}/${p.filename}`);
+    if (noRaw.length) log(`\nNo original (raw scan) found for ${noRaw.length}; uploading the enhanced version only:\n  ${noRaw.join('\n  ')}`);
+    if (scan.rawOnly.length) log(`\nOriginals with no enhanced version (skipped):\n  ${scan.rawOnly.join('\n  ')}`);
+  } else {
+    log('No Original/Enhanced folders, so these are uploaded as enhanced photos without raw scans.');
+  }
+  log('');
 
   const stats = { uploaded: 0, skipped: 0, failed: [] };
   let pending = [];
@@ -138,28 +202,40 @@ export async function uploadOrder({ dir, order, title, galleryUrl, adminToken, l
 }
 
 async function uploadOne(call, code, item) {
-  const original = await fs.promises.readFile(item.file);
-  const sha256 = crypto.createHash('sha256').update(original).digest('hex');
+  const enhanced = await fs.promises.readFile(item.file);
+  const sha256 = crypto.createHash('sha256').update(enhanced).digest('hex');
   const ext = path.extname(item.filename).toLowerCase();
   const contentType = IMAGE_TYPES[ext];
   // The checksum is part of every key, so a re-scanned file never overwrites
   // or gets confused with the old one.
   const keys = {
-    originalKey: `orders/${code}/original/${sha256}${ext}`,
+    enhancedKey: `orders/${code}/enhanced/${sha256}${ext}`,
     screenKey: `orders/${code}/screen/${sha256}.jpg`,
     thumbKey: `orders/${code}/thumb/${sha256}.jpg`,
   };
+  let raw = null;
+  if (item.raw) {
+    const data = await fs.promises.readFile(item.raw.file);
+    const rawExt = path.extname(item.raw.filename).toLowerCase();
+    const rawSha = crypto.createHash('sha256').update(data).digest('hex');
+    raw = {
+      data,
+      contentType: RAW_TYPES[rawExt],
+      record: { filename: item.raw.filename, sha256: rawSha, bytes: data.length, key: `orders/${code}/raw/${rawSha}${rawExt}` },
+    };
+  }
 
   const { files } = await call(`/orders/${code}/upload-urls`, {
     files: [
-      { key: keys.originalKey, contentType },
+      { key: keys.enhancedKey, contentType },
       { key: keys.screenKey, contentType: 'image/jpeg' },
       { key: keys.thumbKey, contentType: 'image/jpeg' },
+      ...(raw ? [{ key: raw.record.key, contentType: raw.contentType }] : []),
     ],
   });
   const byKey = Object.fromEntries(files.map((f) => [f.key, f]));
 
-  const meta = await sharp(original).metadata();
+  const meta = await sharp(enhanced).metadata();
   // EXIF orientation 5-8 means the picture is stored sideways.
   const sideways = meta.orientation >= 5;
   const width = sideways ? meta.height : meta.width;
@@ -167,7 +243,7 @@ async function uploadOne(call, code, item) {
 
   let didUpload = false;
   const resized = (edge) =>
-    sharp(original)
+    sharp(enhanced)
       .rotate()
       .resize(edge, edge, { fit: 'inside', withoutEnlargement: true })
       .jpeg({ quality: 82, mozjpeg: true })
@@ -181,9 +257,13 @@ async function uploadOne(call, code, item) {
     await put(byKey[keys.screenKey].url, await resized(SCREEN_EDGE), 'image/jpeg');
     didUpload = true;
   }
-  // The original goes last, so a half-finished photo is retried next run.
-  if (!byKey[keys.originalKey].exists) {
-    await put(byKey[keys.originalKey].url, original, contentType);
+  if (raw && !byKey[raw.record.key].exists) {
+    await put(byKey[raw.record.key].url, raw.data, raw.contentType);
+    didUpload = true;
+  }
+  // The enhanced file goes last, so a half-finished photo is retried next run.
+  if (!byKey[keys.enhancedKey].exists) {
+    await put(byKey[keys.enhancedKey].url, enhanced, contentType);
     didUpload = true;
   }
 
@@ -193,10 +273,11 @@ async function uploadOne(call, code, item) {
       folder: item.folder,
       filename: item.filename,
       sha256,
-      bytes: original.length,
+      bytes: enhanced.length,
       width,
       height,
       ...keys,
+      raw: raw ? raw.record : null,
     },
   };
 }
