@@ -659,8 +659,8 @@ function renderStage(p) {
     )
     .join('');
   const turn = (x) => `<span class="rotate-group">${p.back ? `<span class="rotate-label">${x.label}</span>` : ''}
-      <button type="button" class="round" data-act="rotate" data-id="${p.id}" data-side="${x.side}" data-dir="-90" aria-label="Turn the ${x.label.toLowerCase()} left">${ICON.rotL}</button>
-      <button type="button" class="round" data-act="rotate" data-id="${p.id}" data-side="${x.side}" data-dir="90" aria-label="Turn the ${x.label.toLowerCase()} right">${ICON.rotR}</button>
+      <button type="button" class="turn" data-act="rotate" data-id="${p.id}" data-side="${x.side}" data-dir="-90" aria-label="Turn the ${x.label.toLowerCase()} left">${ICON.rotL}<span>Turn left</span></button>
+      <button type="button" class="turn" data-act="rotate" data-id="${p.id}" data-side="${x.side}" data-dir="90" aria-label="Turn the ${x.label.toLowerCase()} right"><span>Turn right</span>${ICON.rotR}</button>
     </span>`;
   return `<div class="stage-frame${shown.length > 1 ? ' two' : ''}${zoom ? ' zoomed' : ''}">${frame}</div>
     <div class="rotate-bar">${shown.map(turn).join('')}
@@ -853,12 +853,14 @@ async function startDownload() {
 
 // ------------------------------------------------------------ welcome screen
 // Shown the first time someone opens the gallery on a device (remembered per
-// gallery), and again from the ? button.
+// gallery), again from the ? button, and again everywhere when Jason presses
+// "Show welcome again" on the admin page (that raises welcomeVersion).
 
 const welcomeKey = `fpg-welcomed:${slug}`;
+const welcomeVersion = () => S.order?.welcomeVersion || 1;
 function welcomeSeen() {
   try {
-    return localStorage.getItem(welcomeKey) === '1';
+    return Number(localStorage.getItem(welcomeKey) || 0) >= welcomeVersion();
   } catch {
     return false;
   }
@@ -866,7 +868,7 @@ function welcomeSeen() {
 function closeWelcome() {
   S.welcome = false;
   try {
-    localStorage.setItem(welcomeKey, '1');
+    localStorage.setItem(welcomeKey, String(welcomeVersion()));
   } catch {
     // Private browsing: they'll just see it again next time.
   }

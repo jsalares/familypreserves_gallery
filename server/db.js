@@ -111,6 +111,11 @@ export const MIGRATIONS = [
     UNIQUE (order_id, path)
   );
   `,
+  // 3: the admin page can show a customer the welcome screen again. Browsers
+  // remember the version they last saw; raising it shows the screen once more.
+  `
+  ALTER TABLE orders ADD COLUMN welcome_version INTEGER NOT NULL DEFAULT 1;
+  `,
 ];
 
 export function openDb(dataDir) {

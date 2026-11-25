@@ -205,6 +205,9 @@ button.side:focus-visible { outline: 3px solid var(--tan); outline-offset: -3px;
 .rotate-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 20px; margin-top: 10px; }
 .rotate-group { display: inline-flex; align-items: center; gap: 6px; }
 .rotate-label { font-size: 14px; font-weight: 600; color: var(--muted); margin-right: 2px; }
+.turn { display: inline-flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 20px; background: var(--white); color: var(--green-900); font-size: 14px; font-weight: 600; cursor: pointer; }
+.turn:hover { border-color: var(--green-700); }
+.turn svg { flex: none; }
 /* Turned thumbnails still fill their 4:3 box. */
 .tile-img, .filmstrip button { container-type: size; }
 .tile-img img.r180, .filmstrip img.r180 { transform: rotate(180deg); }
