@@ -295,6 +295,7 @@ export function createApp(config) {
   `);
   const setExpiry = db.prepare('UPDATE orders SET expires_at = ? WHERE id = ?');
   const setTitle = db.prepare('UPDATE orders SET title = ? WHERE id = ?');
+  const bumpWelcome = db.prepare('UPDATE orders SET welcome_version = welcome_version + 1 WHERE id = ?');
   const deleteOrderRow = db.prepare('DELETE FROM orders WHERE id = ?');
   const deleteFolderRow = db.prepare('DELETE FROM source_folders WHERE id = ?');
   const keysInFolder = db.prepare(`
@@ -366,6 +367,14 @@ export function createApp(config) {
     }
     setExpiry.run(v, order.id);
     res.json({ ok: true, expiresOn: v, expired: isExpired({ expires_at: v }) });
+  });
+
+  // The customer sees the welcome screen again on their next visit, on any device.
+  admin.post('/orders/:code/welcome', (req, res) => {
+    const order = findOrder(req, res);
+    if (!order) return;
+    bumpWelcome.run(order.id);
+    res.json({ ok: true });
   });
 
   admin.post('/orders/:code/title', (req, res) => {
@@ -529,7 +538,7 @@ export function createApp(config) {
       count: rows.filter((p) => p.source_folder_id === f.id).length,
     }));
     res.set('Cache-Control', 'no-store').json({
-      order: { code: order.code, title: order.title },
+      order: { code: order.code, title: order.title, welcomeVersion: order.welcome_version },
       folders,
       customFolders: org.customFolders,
       people: org.people,

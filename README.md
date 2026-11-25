@@ -76,6 +76,8 @@ gallery you can:
   the customer marked **Restore**;
 - open it, copy its link, or give it a **new access code** (the old one stops
   working);
+- **show the welcome screen again**: the next time the gallery is opened, on
+  any device, it starts on the welcome screen;
 - set its **end date**, add 90 days, or remove the end date. A gallery is open
   through its end date (Ottawa time) and shows "This gallery has closed" from
   the next morning. Files are kept until you delete the gallery. New galleries

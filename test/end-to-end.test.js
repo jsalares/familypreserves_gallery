@@ -617,3 +617,9 @@ test('a back also matches a front ending in _a', async () => {
   const fixed = await adminCall('POST', '/api/admin/orders/FP-7000/photos', { photos: [{ folder: 'family', ...rec(front.filename, 'a'), back: rec('family_0004_b.jpg', 'b') }] }, bearer);
   assert.equal(fixed.data.total, 1);
 });
+
+test('the admin page can show the welcome screen again', async () => {
+  assert.equal((await gallery()).order.welcomeVersion, 1);
+  assert.equal((await adminCall('POST', '/api/admin/orders/FP-1042/welcome', null, bearer)).status, 200);
+  assert.equal((await gallery()).order.welcomeVersion, 2);
+});

@@ -134,6 +134,7 @@ function renderOrder(o) {
         <a class="btn-plain" href="${esc(o.url)}" target="_blank" rel="noopener">Open gallery</a>
         <button type="button" class="btn-plain" data-act="copy" data-code="${code}">Copy link</button>
         <button type="button" class="btn-plain" data-act="ask-code" data-code="${code}">New access code</button>
+        <button type="button" class="btn-plain" data-act="welcome" data-code="${code}">Show welcome again</button>
       </div>
       ${u.newCode ? `<p class="new-code">New access code: <strong>${esc(u.newCode)}</strong> <button type="button" class="btn-plain" data-act="copy-code" data-code="${code}">Copy</button></p>` : ''}
       <div class="expiry">
@@ -296,6 +297,11 @@ if ($('orders')) {
         return setDate(code, addDays(from, S.data.galleryDays || 90));
       }
       case 'no-end': return setDate(code, null);
+      case 'welcome':
+        return act(code, async () => {
+          await api('POST', `/api/admin/orders/${encodeURIComponent(code)}/welcome`);
+          u.msg = 'Done. The next time this gallery is opened, on any device, it starts on the welcome screen.';
+        });
       default: return;
     }
     render();
