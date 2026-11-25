@@ -5,12 +5,15 @@ import { openDb, createQueries } from './db.js';
 import { createStorage, assertSafeKey } from './storage.js';
 import { createChangeHandler, loadOrganizing, MAX_CHANGES_PER_REQUEST, MAX_CUSTOM_FOLDERS } from './changes.js';
 import { planDownload, sendZip, closeExifTool } from './download.js';
+import { createBackups } from './backup.js';
 import {
   generateAccessCode,
   hashAccessCode,
   verifyAccessCode,
   generateSlug,
   makeSession,
+  sign,
+  unsign,
   readSession,
   sessionCookieName,
   parseCookies,
@@ -21,6 +24,20 @@ import {
 const ORDER_CODE = /^[A-Za-z0-9][A-Za-z0-9-]{1,39}$/;
 const SHA256 = /^[a-f0-9]{64}$/;
 const MAX_BATCH = 200;
+const ADMIN_COOKIE = 'fpg_admin';
+const ADMIN_HOURS = 12;
+const DATE = /^\d{4}-\d{2}-\d{2}$/;
+
+// Gallery end dates are calendar days in Ottawa: open through the whole of
+// that day, closed from the next morning.
+const TZ = 'America/Toronto';
+export const todayLocal = (now = new Date()) => new Intl.DateTimeFormat('en-CA', { timeZone: TZ }).format(now);
+export const addDays = (date, days) => {
+  const d = new Date(`${date}T12:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+};
+export const isExpired = (order, now = new Date()) => Boolean(order.expires_at && todayLocal(now) > order.expires_at.slice(0, 10));
 
 export function createApp(config) {
   const db = openDb(config.dataDir);
@@ -28,6 +45,7 @@ export function createApp(config) {
   const storage = createStorage(config);
   const limiter = createLimiter();
   const applyChanges = createChangeHandler(db);
+  const backups = createBackups({ db, storage });
   const secureCookies = config.publicUrl.startsWith('https://');
   const publicDir = path.join(config.root, 'public');
 
@@ -67,18 +85,53 @@ export function createApp(config) {
   app.get('/healthz', (req, res) => res.json({ ok: true }));
 
   const galleryUrl = (order) => `${config.publicUrl}/g/${order.slug}`;
+  const page = (res, name, status = 200) => {
+    res.status(status).set('Cache-Control', 'no-store').sendFile(path.join(publicDir, name));
+  };
 
   // ---------------------------------------------------------------- admin API
   // Used by the upload tool on Jason's PC. Every call needs the ADMIN_TOKEN.
 
+  const tokenMatches = (value) => {
+    const given = Buffer.from(String(value || ''));
+    const expected = Buffer.from(config.adminToken);
+    return given.length === expected.length && crypto.timingSafeEqual(given, expected);
+  };
+  // The admin page signs in once with the token and then uses a cookie. The
+  // cookie is SameSite=Strict, so other websites can't use it.
+  const adminCookieOk = (req) => {
+    const data = unsign(config.sessionSecret, parseCookies(req.get('cookie'))[ADMIN_COOKIE]);
+    return Boolean(data && data.admin === 1 && data.exp > Date.now());
+  };
+
+  // Sign in and out of the admin page. Wrong tokens count toward the same
+  // lock-out as wrong access codes.
+  app.post('/api/admin-session', (req, res) => {
+    const key = `admin|${req.ip}`;
+    const gate = limiter.check(key);
+    if (!gate.allowed) {
+      res.set('Retry-After', String(gate.retryAfterSec));
+      return res.status(429).json({ error: `Too many tries. Please wait ${Math.ceil(gate.retryAfterSec / 60)} minutes.` });
+    }
+    if (!tokenMatches(String(req.body?.token || '').trim())) {
+      limiter.fail(key);
+      return res.status(401).json({ error: "That token didn't match the ADMIN_TOKEN in the server's .env file." });
+    }
+    limiter.succeed(key);
+    const token = sign(config.sessionSecret, { admin: 1, exp: Date.now() + ADMIN_HOURS * 3600 * 1000 });
+    const cookie = [`${ADMIN_COOKIE}=${token}`, 'Path=/', 'HttpOnly', 'SameSite=Strict', `Max-Age=${ADMIN_HOURS * 3600}`];
+    if (secureCookies) cookie.push('Secure');
+    res.set('Set-Cookie', cookie.join('; ')).json({ ok: true });
+  });
+  app.delete('/api/admin-session', (req, res) => {
+    res.set('Set-Cookie', `${ADMIN_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`).json({ ok: true });
+  });
+  app.get('/admin', (req, res) => page(res, adminCookieOk(req) ? 'admin.html' : 'admin-sign-in.html'));
+
   const admin = express.Router();
   admin.use((req, res, next) => {
-    const given = Buffer.from(String(req.get('authorization') || '').replace(/^Bearer\s+/i, ''));
-    const expected = Buffer.from(config.adminToken);
-    if (given.length !== expected.length || !crypto.timingSafeEqual(given, expected)) {
-      return res.status(401).json({ error: 'Wrong or missing admin token.' });
-    }
-    next();
+    if (tokenMatches(String(req.get('authorization') || '').replace(/^Bearer\s+/i, '')) || adminCookieOk(req)) return next();
+    res.status(401).json({ error: 'Wrong or missing admin token.' });
   });
 
   const findOrder = (req, res) => {
@@ -101,7 +154,8 @@ export function createApp(config) {
     if (!title || title.length > 120) return res.status(400).json({ error: 'A gallery title is needed for a new order.' });
     const accessCode = generateAccessCode();
     const slug = generateSlug(code);
-    q.insertOrder.run({ code, title, slug, access_hash: hashAccessCode(accessCode) });
+    const expires_at = config.galleryDays > 0 ? addDays(todayLocal(), config.galleryDays) : null;
+    q.insertOrder.run({ code, title, slug, access_hash: hashAccessCode(accessCode), expires_at });
     res.status(201).json({ created: true, accessCode, order: { code, title, url: galleryUrl({ slug }) } });
   });
 
@@ -211,18 +265,168 @@ export function createApp(config) {
     }
   });
 
+
+  // ------------------------------------------------------------ admin page API
+  // Used by the admin page at /admin (signed in with the cookie above).
+
+  const orderStats = db.prepare(`
+    SELECT o.*,
+      (SELECT COUNT(*) FROM photos p WHERE p.order_id = o.id) AS photos,
+      (SELECT COUNT(*) FROM photo_backs b JOIN photos p ON p.id = b.photo_id WHERE p.order_id = o.id) AS backs,
+      (SELECT COUNT(*) FROM photos p WHERE p.order_id = o.id AND p.enhance = 1) AS restore,
+      (SELECT COUNT(*) FROM custom_folders c WHERE c.order_id = o.id) AS custom_folders,
+      (SELECT COUNT(*) FROM raw_files r WHERE r.order_id = o.id) AS raw_files,
+      (SELECT COALESCE(SUM(p.bytes), 0) FROM photos p WHERE p.order_id = o.id)
+        + (SELECT COALESCE(SUM(b.bytes), 0) FROM photo_backs b JOIN photos p ON p.id = b.photo_id WHERE p.order_id = o.id)
+        + (SELECT COALESCE(SUM(r.bytes), 0) FROM raw_files r WHERE r.order_id = o.id) AS bytes
+    FROM orders o ORDER BY o.created_at DESC, o.id DESC
+  `);
+  const folderStats = db.prepare(`
+    SELECT f.id, f.name, COUNT(p.id) AS photos FROM source_folders f
+    LEFT JOIN photos p ON p.source_folder_id = f.id
+    WHERE f.order_id = ? GROUP BY f.id ORDER BY f.position, f.id
+  `);
+  const setExpiry = db.prepare('UPDATE orders SET expires_at = ? WHERE id = ?');
+  const setTitle = db.prepare('UPDATE orders SET title = ? WHERE id = ?');
+  const deleteOrderRow = db.prepare('DELETE FROM orders WHERE id = ?');
+  const deleteFolderRow = db.prepare('DELETE FROM source_folders WHERE id = ?');
+  const keysInFolder = db.prepare(`
+    SELECT enhanced_key AS a, screen_key AS b, thumb_key AS c FROM photos WHERE source_folder_id = ?
+    UNION ALL
+    SELECT bk.enhanced_key, bk.screen_key, bk.thumb_key FROM photo_backs bk JOIN photos p ON p.id = bk.photo_id WHERE p.source_folder_id = ?
+  `);
+  const keysInOrder = db.prepare(`
+    SELECT enhanced_key AS a, screen_key AS b, thumb_key AS c FROM photos WHERE order_id = ?
+    UNION ALL
+    SELECT bk.enhanced_key, bk.screen_key, bk.thumb_key FROM photo_backs bk JOIN photos p ON p.id = bk.photo_id WHERE p.order_id = ?
+    UNION ALL
+    SELECT key, NULL, NULL FROM raw_files WHERE order_id = ?
+  `);
+  const flatKeys = (rows) => new Set(rows.flatMap((r) => [r.a, r.b, r.c]).filter(Boolean));
+
+  const describeOrder = (o) => ({
+    code: o.code,
+    title: o.title,
+    url: galleryUrl(o),
+    createdAt: o.created_at,
+    expiresOn: o.expires_at ? o.expires_at.slice(0, 10) : null,
+    expired: isExpired(o),
+    photos: o.photos,
+    backs: o.backs,
+    restore: o.restore,
+    customFolders: o.custom_folders,
+    rawFiles: o.raw_files,
+    bytes: o.bytes,
+    folders: folderStats.all(o.id).map((f) => ({ name: f.name, photos: f.photos })),
+  });
+
+  admin.get('/overview', async (req, res) => {
+    let backup;
+    try {
+      backup = await backups.status();
+    } catch (err) {
+      backup = { backups: [], lastError: { message: err.message }, keep: 0 };
+    }
+    res.set('Cache-Control', 'no-store').json({
+      today: todayLocal(),
+      galleryDays: config.galleryDays,
+      orders: orderStats.all().map(describeOrder),
+      backup: {
+        latest: backup.backups[0] || null,
+        count: backup.backups.length,
+        keep: backup.keep,
+        lastError: backup.lastError,
+      },
+    });
+  });
+
+  admin.post('/backup', async (req, res) => {
+    try {
+      const out = await backups.run();
+      res.json({ ok: true, ...out });
+    } catch (err) {
+      res.status(500).json({ error: `Backup failed: ${err.message}` });
+    }
+  });
+
+  // { expiresOn: "2027-03-01" } or { expiresOn: null } for no end date.
+  admin.post('/orders/:code/expiry', (req, res) => {
+    const order = findOrder(req, res);
+    if (!order) return;
+    const v = req.body?.expiresOn ?? null;
+    if (v !== null && (!DATE.test(String(v)) || Number.isNaN(Date.parse(v)))) {
+      return res.status(400).json({ error: 'Pick a date, or no end date.' });
+    }
+    setExpiry.run(v, order.id);
+    res.json({ ok: true, expiresOn: v, expired: isExpired({ expires_at: v }) });
+  });
+
+  admin.post('/orders/:code/title', (req, res) => {
+    const order = findOrder(req, res);
+    if (!order) return;
+    const title = String(req.body?.title || '').trim();
+    if (!title || title.length > 120) return res.status(400).json({ error: 'The title needs 1 to 120 characters.' });
+    setTitle.run(title, order.id);
+    res.json({ ok: true, title });
+  });
+
+  // Deleting needs the order code typed again in the body, so a slip can't do it.
+  const confirmCode = (req, res, order) => {
+    if (String(req.body?.confirm || '').trim().toUpperCase() !== order.code) {
+      res.status(400).json({ error: `Type ${order.code} to confirm.` });
+      return false;
+    }
+    return true;
+  };
+
+  // The whole gallery: database rows first (so it disappears at once), then
+  // every file stored for it.
+  admin.delete('/orders/:code', async (req, res) => {
+    const order = findOrder(req, res);
+    if (!order || !confirmCode(req, res, order)) return;
+    deleteOrderRow.run(order.id);
+    try {
+      const files = await storage.list(`orders/${order.code}/`);
+      await storage.remove(files.map((f) => f.key));
+      res.json({ ok: true, filesDeleted: files.length });
+    } catch (err) {
+      res.status(500).json({ error: `The gallery is gone, but some files could not be removed from storage: ${err.message}` });
+    }
+  });
+
+  // One scanned folder and its photos (with backs). Customers' custom folders
+  // lose those copies. A file is only removed from storage when no photo left
+  // in the order uses it (identical scans share one file).
+  admin.delete('/orders/:code/folders', async (req, res) => {
+    const order = findOrder(req, res);
+    if (!order || !confirmCode(req, res, order)) return;
+    const name = String(req.body?.folder || '');
+    const folder = q.sourceFolder.get(order.id, name);
+    if (!folder) return res.status(404).json({ error: `No scanned folder called "${name}".` });
+    const gone = db.transaction(() => {
+      const keys = flatKeys(keysInFolder.all(folder.id, folder.id));
+      const photos = q.photosInFolder.all(folder.id).length;
+      deleteFolderRow.run(folder.id);
+      q.renumber(order.id);
+      const still = flatKeys(keysInOrder.all(order.id, order.id, order.id));
+      return { photos, keys: [...keys].filter((k) => !still.has(k)) };
+    })();
+    try {
+      await storage.remove(gone.keys);
+      res.json({ ok: true, photosDeleted: gone.photos, filesDeleted: gone.keys.length });
+    } catch (err) {
+      res.status(500).json({ error: `The folder is gone, but some files could not be removed from storage: ${err.message}` });
+    }
+  });
+
   app.use('/api/admin', admin);
 
   // ------------------------------------------------------------ customer side
 
   const loadOrder = (req) => q.orderBySlug.get(String(req.params.slug));
-  const isExpired = (order) => Boolean(order.expires_at && Date.parse(order.expires_at) < Date.now());
   const signedIn = (req, order) =>
     readSession(config.sessionSecret, parseCookies(req.get('cookie'))[sessionCookieName(order.id)], order.id);
 
-  const page = (res, name, status = 200) => {
-    res.status(status).set('Cache-Control', 'no-store').sendFile(path.join(publicDir, name));
-  };
 
   app.get('/g/:slug', (req, res) => {
     const order = loadOrder(req);
@@ -371,7 +575,10 @@ export function createApp(config) {
     app,
     db,
     storage,
+    backups,
     close: async () => {
+      backups.stop();
+      await backups.idle();
       await closeExifTool();
       db.close();
     },

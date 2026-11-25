@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Admin · Family Preserves</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&amp;family=Source+Sans+3:wght@400;600;700&amp;display=swap">
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <img src="/assets/jar.png" alt="">
+    <div><span class="brand-name serif">Family Preserves</span><span class="brand-tag">Gallery admin</span></div>
+  </div>
+  <button type="button" class="btn btn-ghost" id="sign-out">Sign out</button>
+</header>
+<main class="admin">
+  <section class="backup-card" id="backup" aria-live="polite"></section>
+  <div class="admin-head">
+    <h1 class="serif">Galleries <span class="count" id="count"></span></h1>
+    <input type="search" id="find" placeholder="Find by order or name" aria-label="Find a gallery">
+  </div>
+  <p class="note" id="defaults"></p>
+  <div id="orders" class="orders"><p class="note">Loading…</p></div>
+</main>
+<script src="/assets/admin.js"></script>
+</body>
+</html>

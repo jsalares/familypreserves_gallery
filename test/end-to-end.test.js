@@ -16,9 +16,11 @@ import yauzl from 'yauzl';
 import { exiftool } from 'exiftool-vendored';
 import { orientationAfterTurn, tagsFor, safeName } from '../server/download.js';
 import { openDb, MIGRATIONS } from '../server/db.js';
+import { todayLocal, addDays, isExpired } from '../server/app.js';
+import { KEEP_BACKUPS } from '../server/backup.js';
 
 const ADMIN_TOKEN = 'test-admin-token-0123456789abcdef';
-let tmp, server, base, close, orderDir, db;
+let tmp, server, base, close, orderDir, db, backups;
 const quiet = () => {};
 
 async function freePort() {
@@ -50,6 +52,7 @@ before(async () => {
   const created = createApp(config);
   close = created.close;
   db = created.db;
+  backups = created.backups;
   await new Promise((resolve) => (server = created.app.listen(port, '127.0.0.1', resolve)));
 
   orderDir = path.join(tmp, 'FP-1042 Martin');
@@ -478,4 +481,114 @@ test('a version 1 database upgrades and keeps its photos', () => {
   assert.deepEqual({ ...row }, { enhanced_key: 'orders/FP-1/original/abc.jpg', rotation: 0 });
   assert.equal(upgraded.pragma('user_version', { simple: true }), MIGRATIONS.length);
   upgraded.close();
+});
+
+// ---------------------------------------------------------------- step 5: admin
+
+async function adminCall(method, url, body, headers = {}) {
+  const res = await fetch(`${base}${url}`, {
+    method,
+    headers: { 'content-type': 'application/json', ...headers },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  return { status: res.status, data: await res.json().catch(() => ({})), res };
+}
+const bearer = { authorization: `Bearer ${ADMIN_TOKEN}` };
+
+test('the admin page needs the admin token, then works with a cookie', async () => {
+  const page = await fetch(`${base}/admin`);
+  assert.match(await page.text(), /Admin sign-in/);
+  assert.equal((await adminCall('GET', '/api/admin/overview')).status, 401);
+  assert.equal((await adminCall('POST', '/api/admin-session', { token: 'wrong' })).status, 401);
+
+  const ok = await adminCall('POST', '/api/admin-session', { token: ADMIN_TOKEN });
+  assert.equal(ok.status, 200);
+  const cookie = ok.res.headers.get('set-cookie');
+  assert.match(cookie, /HttpOnly/);
+  assert.match(cookie, /SameSite=Strict/);
+  const jar = { cookie: cookie.split(';')[0] };
+  assert.match(await (await fetch(`${base}/admin`, { headers: jar })).text(), /id="orders"/);
+  const { status, data } = await adminCall('GET', '/api/admin/overview', null, jar);
+  assert.equal(status, 200);
+  const martin = data.orders.find((o) => o.code === 'FP-1042');
+  assert.ok(martin.photos > 0);
+  assert.ok(martin.folders.some((f) => f.name === 'Album 1'));
+  assert.equal(data.galleryDays, 90);
+});
+
+test('new galleries get an end date, and closed galleries show the closed page', async () => {
+  const { data } = await adminCall('POST', '/api/admin/orders', { code: 'FP-5000', title: 'Expiry test' }, bearer);
+  const { data: all } = await adminCall('GET', '/api/admin/overview', null, bearer);
+  const o = all.orders.find((x) => x.code === 'FP-5000');
+  assert.equal(o.expiresOn, addDays(todayLocal(), 90));
+  assert.equal(o.expired, false);
+
+  const yesterday = addDays(todayLocal(), -1);
+  assert.equal((await adminCall('POST', '/api/admin/orders/FP-5000/expiry', { expiresOn: yesterday }, bearer)).data.expired, true);
+  assert.equal((await fetch(data.order.url)).status, 410);
+  // The end date itself is still open: it closes the next morning.
+  await adminCall('POST', '/api/admin/orders/FP-5000/expiry', { expiresOn: todayLocal() }, bearer);
+  assert.equal((await fetch(data.order.url)).status, 200);
+  await adminCall('POST', '/api/admin/orders/FP-5000/expiry', { expiresOn: null }, bearer);
+  assert.equal((await fetch(data.order.url)).status, 200);
+  assert.equal((await adminCall('POST', '/api/admin/orders/FP-5000/expiry', { expiresOn: 'soon' }, bearer)).status, 400);
+
+  assert.equal(isExpired({ expires_at: '2026-11-24' }, new Date('2026-11-25T04:30:00Z')), false, '11:30 PM in Ottawa');
+  assert.equal(isExpired({ expires_at: '2026-11-24' }, new Date('2026-11-25T05:30:00Z')), true, '12:30 AM in Ottawa');
+});
+
+test('deleting a scanned folder removes its photos and only the files nothing else uses', async () => {
+  const dir = path.join(tmp, 'FP-6000');
+  await makeImage(path.join(dir, 'Kay', 'a.jpg'), 600, 400, '#336699');
+  await makeImage(path.join(dir, 'Kay', 'a_b.jpg'), 600, 400, '#eeeeee');
+  await makeImage(path.join(dir, 'Kay', 'b.jpg'), 600, 400, '#996633');
+  // The mistake from the old upload tool: the raw folder as an album, with an
+  // identical copy of the back.
+  fs.mkdirSync(path.join(dir, 'Oops'), { recursive: true });
+  fs.copyFileSync(path.join(dir, 'Kay', 'a_b.jpg'), path.join(dir, 'Oops', 'a_b.jpg'));
+  await makeImage(path.join(dir, 'Oops', 'c.jpg'), 600, 400, '#663399');
+  await uploadOrder({ dir, order: 'FP-6000', title: 'Delete test', galleryUrl: base, adminToken: ADMIN_TOKEN, log: quiet });
+
+  const files = () => fs.readdirSync(path.join(tmp, 'data', 'files', 'orders', 'FP-6000', 'enhanced')).length;
+  assert.equal(files(), 4); // a, a_b (shared), b, c
+
+  const wrong = await adminCall('DELETE', '/api/admin/orders/FP-6000/folders', { folder: 'Oops', confirm: 'nope' }, bearer);
+  assert.equal(wrong.status, 400);
+  const { status, data } = await adminCall('DELETE', '/api/admin/orders/FP-6000/folders', { folder: 'Oops', confirm: 'fp-6000' }, bearer);
+  assert.equal(status, 200);
+  assert.equal(data.photosDeleted, 2);
+  assert.equal(files(), 3, 'c is gone; the back shared with Kay/a stays');
+
+  const { data: all } = await adminCall('GET', '/api/admin/overview', null, bearer);
+  assert.deepEqual(all.orders.find((o) => o.code === 'FP-6000').folders, [{ name: 'Kay', photos: 2 }]);
+});
+
+test('deleting a gallery removes it and all its files', async () => {
+  const before = await adminCall('GET', '/api/admin/overview', null, bearer);
+  const url = before.data.orders.find((o) => o.code === 'FP-6000').url;
+  assert.equal((await adminCall('DELETE', '/api/admin/orders/FP-6000', { confirm: 'FP-1042' }, bearer)).status, 400);
+  const { status, data } = await adminCall('DELETE', '/api/admin/orders/FP-6000', { confirm: 'FP-6000' }, bearer);
+  assert.equal(status, 200);
+  assert.ok(data.filesDeleted >= 9);
+  const left = fs.readdirSync(path.join(tmp, 'data', 'files', 'orders', 'FP-6000'), { recursive: true, withFileTypes: true }).filter((e) => e.isFile());
+  assert.equal(left.length, 0);
+  assert.equal((await fetch(url)).status, 404);
+  assert.equal((await adminCall('DELETE', '/api/admin/orders/FP-6000', { confirm: 'FP-6000' }, bearer)).status, 404);
+});
+
+test('backs up the database and keeps the newest copies', async () => {
+  const dir = path.join(tmp, 'data', 'files', 'backups');
+  fs.mkdirSync(dir, { recursive: true });
+  for (let i = 1; i <= KEEP_BACKUPS + 2; i++) fs.writeFileSync(path.join(dir, `gallery-2020-01-${String(i).padStart(2, '0')}.sqlite`), 'old');
+  const { status, data } = await adminCall('POST', '/api/admin/backup', null, bearer);
+  assert.equal(status, 200);
+  const kept = fs.readdirSync(dir).sort();
+  assert.equal(kept.length, KEEP_BACKUPS);
+  assert.ok(kept.includes(data.key.split('/').pop()), 'today’s copy is kept');
+  assert.ok(!kept.includes('gallery-2020-01-01.sqlite'), 'the oldest are removed');
+  const copy = new Database(path.join(dir, data.key.split('/').pop()), { readonly: true });
+  assert.ok(copy.prepare("SELECT COUNT(*) AS n FROM orders WHERE code = 'FP-1042'").get().n === 1);
+  copy.close();
+  const { data: all } = await adminCall('GET', '/api/admin/overview', null, bearer);
+  assert.equal(all.backup.latest.key, data.key);
 });

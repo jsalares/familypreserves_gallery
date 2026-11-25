@@ -87,6 +87,7 @@ nssm restart FamilyPreservesGallery
 
 ## Backups
 
-Until the nightly backup (roadmap step 5) is built, copy
-`data\gallery.sqlite` somewhere safe after uploading orders. The photos
-themselves (raw originals and enhanced versions) are in R2, and your own copies stay on your PC.
+The server backs up the database to R2 every night after 3 AM (server time)
+and keeps 30 days. Check the last one, or make one now, on the admin page at
+`/admin`. The photos themselves are already in R2, and your own copies stay
+on your PC. How to restore is in the README under "The admin page".

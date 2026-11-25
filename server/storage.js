@@ -2,7 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import crypto from 'node:crypto';
-import { S3Client, HeadObjectCommand, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import {
+  S3Client,
+  HeadObjectCommand,
+  GetObjectCommand,
+  PutObjectCommand,
+  ListObjectsV2Command,
+  DeleteObjectsCommand,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { sign, unsign } from './auth.js';
 
@@ -54,6 +61,37 @@ function r2Storage(config) {
       const out = await client.send(new GetObjectCommand({ Bucket: bucket, Key: assertSafeKey(key) }));
       return out.Body;
     },
+    // Upload a file from this machine (the database backups).
+    async putFile(key, file, contentType = 'application/octet-stream') {
+      const { size } = await fs.promises.stat(file);
+      await client.send(
+        new PutObjectCommand({
+          Bucket: bucket,
+          Key: assertSafeKey(key),
+          Body: fs.createReadStream(file),
+          ContentLength: size,
+          ContentType: contentType,
+        })
+      );
+    },
+    // Every file under a prefix: [{ key, bytes, modified }].
+    async list(prefix) {
+      const out = [];
+      let token;
+      do {
+        const page = await client.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix, ContinuationToken: token }));
+        for (const o of page.Contents || []) out.push({ key: o.Key, bytes: o.Size, modified: o.LastModified?.toISOString() });
+        token = page.IsTruncated ? page.NextContinuationToken : undefined;
+      } while (token);
+      return out;
+    },
+    async remove(keys) {
+      for (let i = 0; i < keys.length; i += 1000) {
+        const chunk = keys.slice(i, i + 1000).map((k) => ({ Key: assertSafeKey(k) }));
+        const out = await client.send(new DeleteObjectsCommand({ Bucket: bucket, Delete: { Objects: chunk, Quiet: true } }));
+        if (out.Errors?.length) throw new Error(`Could not delete ${out.Errors.length} files from R2 (${out.Errors[0].Message}).`);
+      }
+    },
     uploadUrl(key, contentType) {
       return getSignedUrl(
         client,
@@ -90,6 +128,32 @@ function localStorage(config) {
     },
     async read(key) {
       return fs.createReadStream(fileFor(key));
+    },
+    async putFile(key, file) {
+      const dest = fileFor(key);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      await fs.promises.copyFile(file, dest);
+    },
+    async list(prefix) {
+      const out = [];
+      const walk = (dir) => {
+        if (!fs.existsSync(dir)) return;
+        for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+          const full = path.join(dir, e.name);
+          if (e.isDirectory()) walk(full);
+          else if (!e.name.endsWith('.part')) {
+            const key = path.relative(base, full).split(path.sep).join('/');
+            if (!key.startsWith(prefix)) continue;
+            const st = fs.statSync(full);
+            out.push({ key, bytes: st.size, modified: st.mtime.toISOString() });
+          }
+        }
+      };
+      walk(base);
+      return out;
+    },
+    async remove(keys) {
+      for (const k of keys) fs.rmSync(fileFor(k), { force: true });
     },
     // Express handlers for the signed links above.
     routes(app) {

@@ -26,6 +26,8 @@ export function loadConfig(overrides = {}) {
     sessionSecret: env.SESSION_SECRET || required('SESSION_SECRET'),
     adminToken: env.ADMIN_TOKEN || required('ADMIN_TOKEN'),
     storage,
+    // How long a new gallery stays open, in days (0 = no end date).
+    galleryDays: env.GALLERY_DAYS === undefined || env.GALLERY_DAYS === '' ? 90 : Math.max(0, Number(env.GALLERY_DAYS) || 0),
     r2: storage === 'r2'
       ? {
           accountId: env.R2_ACCOUNT_ID || required('R2_ACCOUNT_ID'),
