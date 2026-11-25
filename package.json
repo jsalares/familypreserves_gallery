@@ -17,7 +17,12 @@
     "@aws-sdk/client-s3": "^3.1176.0",
     "@aws-sdk/s3-request-presigner": "^3.1176.0",
     "better-sqlite3": "^12.11.1",
+    "exiftool-vendored": "35.21.0",
     "express": "^5.3.0",
-    "sharp": "^0.35.5"
+    "sharp": "^0.35.5",
+    "yazl": "3.3.1"
+  },
+  "devDependencies": {
+    "yauzl": "3.4.0"
   }
 }

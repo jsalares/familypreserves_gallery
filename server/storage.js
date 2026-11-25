@@ -49,6 +49,11 @@ function r2Storage(config) {
         expiresIn: VIEW_LINK_SECONDS,
       });
     },
+    // A stream of the file's bytes, for building downloads on the server.
+    async read(key) {
+      const out = await client.send(new GetObjectCommand({ Bucket: bucket, Key: assertSafeKey(key) }));
+      return out.Body;
+    },
     uploadUrl(key, contentType) {
       return getSignedUrl(
         client,
@@ -82,6 +87,9 @@ function localStorage(config) {
     },
     async uploadUrl(key) {
       return link(assertSafeKey(key), 'PUT', UPLOAD_LINK_SECONDS);
+    },
+    async read(key) {
+      return fs.createReadStream(fileFor(key));
     },
     // Express handlers for the signed links above.
     routes(app) {

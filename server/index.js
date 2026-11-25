@@ -11,9 +11,11 @@ const server = app.listen(config.port, config.host, () => {
 // NSSM stops the service with Ctrl+C / SIGINT; close the database cleanly.
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
-    server.close(() => {
-      close();
+    server.close(async () => {
+      await close();
       process.exit(0);
     });
+    // Don't wait forever for a long download to finish.
+    setTimeout(() => process.exit(0), 10_000).unref();
   });
 }

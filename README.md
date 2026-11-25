@@ -103,8 +103,10 @@ the upload tool, and sign in as a customer.
 3. **Done:** changes are kept on the customer's device until the server has
    them, so closing the tab, losing signal or a flat battery loses nothing;
    they are sent on the next visit. Undo button (and Ctrl+Z) for recent edits.
-4. Zip downloads: the customer ticks *Raw scans*, *Enhanced* and any of their
-   custom folders. Custom folders hold enhanced copies (with backs). Details and
-   rotation are written into the enhanced files and copies; raw scans are never
-   touched.
+4. **Done:** zip downloads. The customer ticks scanned folders, custom folders
+   and the raw scans. The zip is built while it downloads (no waiting, any
+   size). Enhanced photos and their copies get the details written in with
+   ExifTool (year as the date taken, caption, place, event, people, folder
+   names as tags) and their turn applied; raw scans are never touched.
+   ExifTool comes with `npm install`; nothing extra to install on the server.
 5. Nightly database backup to R2, gallery expiry, small admin page.
