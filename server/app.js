@@ -128,6 +128,8 @@ export function createApp(config) {
   });
   app.get('/admin', (req, res) => page(res, adminCookieOk(req) ? 'admin.html' : 'admin-sign-in.html'));
 
+  const removeStrayBack = db.prepare('DELETE FROM photos WHERE source_folder_id = ? AND filename = ?');
+
   const admin = express.Router();
   admin.use((req, res, next) => {
     if (tokenMatches(String(req.get('authorization') || '').replace(/^Bearer\s+/i, '')) || adminCookieOk(req)) return next();
@@ -227,7 +229,12 @@ export function createApp(config) {
           let sf = q.sourceFolder.get(order.id, folder);
           if (!sf) sf = { id: q.insertSourceFolder.run(order.id, folder).lastInsertRowid };
           const { id } = q.upsertPhoto.get({ order_id: order.id, source_folder_id: sf.id, ...front });
-          if (back) q.upsertBack.run({ photo_id: id, ...back });
+          if (back) {
+            q.upsertBack.run({ photo_id: id, ...back });
+            // An earlier upload may have added this back as a photo of its own
+            // (before its front was recognised). It now lives with its front.
+            removeStrayBack.run(sf.id, back.filename);
+          }
           else q.deleteBack.run(id);
         }
         q.renumber(order.id);

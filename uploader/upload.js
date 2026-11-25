@@ -5,7 +5,7 @@
 //
 // In each album folder the photos are the enhanced versions (what the
 // customer sees). A file ending in _b is the back of the photo with the same
-// name. Anything in a "raw" folder is uploaded exactly as it is, only for the
+// name, or the same name ending in _a. Anything in a "raw" folder is uploaded exactly as it is, only for the
 // customer to download; it is never matched, resized or shown.
 //
 //   FP-1042 Martin\Album 1\scan001.jpg        photo (front)
@@ -31,7 +31,7 @@ const IMAGE_TYPES = {
   '.tiff': 'image/tiff',
 };
 const RAW_DIR = /^raw$/i;
-const BACK = /^(.*)_b$/i; // scan001_b is the back of scan001
+const BACK = /^(.*)_b$/i; // scan001_b is the back of scan001 (or of scan001_a)
 const SCREEN_EDGE = 2048; // what customers browse
 const THUMB_EDGE = 480; // grid and filmstrip
 const LOOSE_FOLDER = 'Other photos'; // for files sitting directly in the order folder, next to album folders
@@ -90,9 +90,10 @@ export function scanOrder(orderDir) {
   for (const e of enhanced) {
     const m = BACK.exec(path.parse(e.filename).name);
     if (!m) continue;
-    const front = byName.get(nameKey(e.relDir, m[1]));
+    // The front is scan001 or scan001_a.
+    const front = byName.get(nameKey(e.relDir, m[1])) || byName.get(nameKey(e.relDir, `${m[1]}_a`));
     if (front) backOf.set(front, e);
-    else warnings.push(`${path.join(e.relDir, e.filename)} looks like the back of a photo, but there is no front called ${m[1]}. Uploading it as its own photo.`);
+    else warnings.push(`${path.join(e.relDir, e.filename)} looks like the back of a photo, but there is no front called ${m[1]} or ${m[1]}_a. Uploading it as its own photo.`);
   }
   const backs = new Set(backOf.values());
 

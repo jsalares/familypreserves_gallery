@@ -19,7 +19,7 @@ upload tool (npm run upload)    details, access codes              thumbnails
 
 - **Your PC**: one folder per order, one subfolder per album, box or carousel.
   The photos in each subfolder are the enhanced (colour-corrected) versions;
-  `scan001_b.jpg` is the back of `scan001.jpg`. Raw scans sit in a `raw`
+  `scan001_b.jpg` is the back of `scan001.jpg` (or of `scan001_a.jpg`). Raw scans sit in a `raw`
   folder. The upload tool makes thumbnails, uploads everything and creates the
   gallery. Each subfolder becomes one of the customer's *scanned folders*.
 - **Customers see and sort the enhanced versions**, with the back beside the
@@ -53,7 +53,7 @@ npm run upload -- "C:\Orders\FP-1042 Martin" --order FP-1042 --title "The Martin
   ```
   FP-1042 Martin\
     Album 1\scan001.jpg        enhanced photo (.jpg, .png, .tif)
-    Album 1\scan001_b.jpg      the back of scan001, shown beside it
+    Album 1\scan001_b.jpg      the back of scan001 (or scan001_a), shown beside it
     Album 1\raw\…              raw scans: any files, uploaded untouched
   ```
 

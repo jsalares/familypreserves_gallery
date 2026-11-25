@@ -592,3 +592,28 @@ test('backs up the database and keeps the newest copies', async () => {
   const { data: all } = await adminCall('GET', '/api/admin/overview', null, bearer);
   assert.equal(all.backup.latest.key, data.key);
 });
+
+test('a back also matches a front ending in _a', async () => {
+  const dir = path.join(tmp, 'a-fronts');
+  await makeImage(path.join(dir, 'family', 'family_0004_a.jpg'), 400, 300, '#887766');
+  await makeImage(path.join(dir, 'family', 'family_0004_b.jpg'), 400, 300, '#ddddcc');
+  await makeImage(path.join(dir, 'family', 'family_0005.jpg'), 400, 300, '#887766');
+  await makeImage(path.join(dir, 'family', 'family_0005_b.jpg'), 400, 300, '#ddddcc');
+  const scan = scanOrder(dir);
+  assert.deepEqual(
+    scan.photos.map((p) => [p.filename, p.back?.filename ?? null]),
+    [
+      ['family_0004_a.jpg', 'family_0004_b.jpg'],
+      ['family_0005.jpg', 'family_0005_b.jpg'],
+    ]
+  );
+  assert.ok(!scan.warnings.some((w) => /looks like the back/.test(w)));
+
+  // An older upload that added the back as its own photo is tidied up.
+  const front = scan.photos[0];
+  const rec = (name, sha) => ({ filename: name, sha256: sha.repeat(64), bytes: 1, enhancedKey: `orders/FP-7000/enhanced/${sha}.jpg`, screenKey: `orders/FP-7000/screen/${sha}.jpg`, thumbKey: `orders/FP-7000/thumb/${sha}.jpg` });
+  await adminCall('POST', '/api/admin/orders', { code: 'FP-7000', title: 'Stray backs' }, bearer);
+  await adminCall('POST', '/api/admin/orders/FP-7000/photos', { photos: [{ folder: 'family', ...rec('family_0004_a.jpg', 'a') }, { folder: 'family', ...rec('family_0004_b.jpg', 'b') }] }, bearer);
+  const fixed = await adminCall('POST', '/api/admin/orders/FP-7000/photos', { photos: [{ folder: 'family', ...rec(front.filename, 'a'), back: rec('family_0004_b.jpg', 'b') }] }, bearer);
+  assert.equal(fixed.data.total, 1);
+});
