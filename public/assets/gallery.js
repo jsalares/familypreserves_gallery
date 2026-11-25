@@ -52,6 +52,7 @@ const S = {
   zoom: null, // { id, side } when one side of a two-sided photo is shown on its own
   raw: { files: 0, bytes: 0 },
   dl: null, // the download screen: { scanned: Set, custom: Set, raw, started }
+  welcome: false, // the welcome screen, shown on a first visit from this device
   folderDraft: '',
 };
 
@@ -451,8 +452,8 @@ function chip(cls, act, label, count, pressed, extra = '') {
 }
 
 function renderShelves() {
-  $('shelves').hidden = Boolean(S.dl);
-  if (S.dl) return;
+  $('shelves').hidden = Boolean(S.dl || S.welcome);
+  if (S.dl || S.welcome) return;
   const filed = S.photos.filter((p) => p.customFolders.length).length;
   const unfiled = S.photos.length - filed;
   const pct = S.photos.length ? Math.round((filed / S.photos.length) * 100) : 0;
@@ -766,7 +767,92 @@ async function startDownload() {
   render();
 }
 
+// ------------------------------------------------------------ welcome screen
+// Shown the first time someone opens the gallery on a device (remembered per
+// gallery), and again from the ? button.
+
+const welcomeKey = `fpg-welcomed:${slug}`;
+function welcomeSeen() {
+  try {
+    return localStorage.getItem(welcomeKey) === '1';
+  } catch {
+    return false;
+  }
+}
+function closeWelcome() {
+  S.welcome = false;
+  try {
+    localStorage.setItem(welcomeKey, '1');
+  } catch {
+    // Private browsing: they'll just see it again next time.
+  }
+}
+
+const WELCOME_ICON = {
+  look: `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M21 16l-5-5-8 8"/></svg>`,
+  sort: `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v5M9.5 13.5h5"/></svg>`,
+  save: `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>`,
+};
+
+// A fan of real prints from this order, spread evenly from first scan to last.
+const COLLAGE_MAX = 7;
+function renderCollage() {
+  const all = S.photos;
+  if (!all.length) return '';
+  const count = Math.min(COLLAGE_MAX, all.length);
+  const picks = [];
+  for (let i = 0; i < count; i++) picks.push(all[Math.floor(((i + 0.5) * all.length) / count)]);
+  return `<div class="collage n${count}" aria-hidden="true">${picks
+    .map(
+      (p) => `<span class="print"><span class="print-img"><img src="${esc(p.thumb)}" alt="" decoding="async" class="r${p.rotation}"></span></span>`,
+    )
+    .join('')}</div>`;
+}
+
+function renderWelcome() {
+  const n = S.photos.length;
+  const backs = S.photos.filter((p) => p.back).length;
+  return `<section class="welcome" aria-labelledby="welcome-title">
+      ${renderCollage()}
+      <div class="welcome-thanks">
+        <p class="eyebrow">Welcome to your photo gallery</p>
+        <h2 id="welcome-title" class="serif">Thank you for trusting us with your memories</h2>
+        <p class="lead">All ${plural(n, 'photo has', 'photos have')} been carefully scanned and enhanced here in Ottawa. It's been a joy bringing them back to life, and we hope you enjoy reliving every one.</p>
+        <p class="signoff">Jason, Family Preserves</p>
+      </div>
+      <p class="welcome-intro">Here's what you can do in your gallery.</p>
+      <ol class="welcome-steps">
+        <li>
+          <span class="icon">${WELCOME_ICON.look}</span>
+          <div><h3>Look through your photos</h3>
+          <p>They're in the same albums and boxes you gave us${backs ? ', and photos with something on the back show both sides' : ''}. You can turn any photo the right way up.</p></div>
+        </li>
+        <li>
+          <span class="icon">${WELCOME_ICON.sort}</span>
+          <div><h3>Organize them your way <span class="optional">optional</span></h3>
+          <p>Make up to ${S.maxCustom} custom folders, like “Christmas” or “Grandma's house”, and copy photos into them. Add the year, place, event and who's in each photo so they're easy to find later. Everything saves as you go.</p>
+          <p>See one that's torn, stained or faded? Tick <strong>Restore this photo</strong> and we'll send you a quote.</p></div>
+        </li>
+        <li>
+          <span class="icon">${WELCOME_ICON.save}</span>
+          <div><h3>Download them</h3>
+          <p>Get everything in one zip file: the enhanced photos, your custom folders${S.raw.files ? ' and the original raw scans' : ''}. The details you add are saved inside each photo, so other photo apps can show and search them.</p></div>
+        </li>
+      </ol>
+      <div class="welcome-actions">
+        <button type="button" class="btn" data-act="welcome-start">Start organizing</button>
+        <button type="button" class="btn btn-outline" data-act="welcome-download">Skip to download</button>
+      </div>
+      <p class="note">You can come back and organize any time. To see this again, tap the ? at the top.</p>
+    </section>`;
+}
+
 function renderMain() {
+  if (S.welcome) {
+    // The welcome screen is static; re-rendering it would replay the collage animation.
+    if (!$('main').querySelector('.welcome')) $('main').innerHTML = renderWelcome();
+    return;
+  }
   if (S.dl) {
     $('main').innerHTML = renderDownload();
     return;
@@ -883,6 +969,9 @@ document.addEventListener('click', (e) => {
       break;
     }
     case 'dl-start': startDownload(); return;
+    case 'welcome-start': closeWelcome(); window.scrollTo({ top: 0 }); break;
+    case 'welcome-download': closeWelcome(); openDownload(); window.scrollTo({ top: 0 }); break;
+    case 'show-welcome': setHelp(false); S.dl = null; S.welcome = true; window.scrollTo({ top: 0 }); break;
     case 'ask-delete': S.confirmDelete = true; break;
     case 'cancel-delete': S.confirmDelete = false; break;
     case 'delete-folder': deleteFolder(S.view.name); break;
@@ -966,7 +1055,7 @@ $('download-btn').addEventListener('click', () => {
 
 function renderDownloadButton() {
   const btn = $('download-btn');
-  btn.hidden = !S.photos.length;
+  btn.hidden = !S.photos.length || S.welcome;
   btn.setAttribute('aria-expanded', String(Boolean(S.dl)));
   btn.querySelector('span').textContent = S.dl ? 'Back to photos' : 'Download';
 }
@@ -982,6 +1071,7 @@ $('signout').addEventListener('click', async () => {
 // ------------------------------------------------------------------- start
 
 let firstLoad = true;
+let firstRender = true;
 
 async function load({ keepPlace = false } = {}) {
   const res = await fetch(api('/gallery'));
@@ -1013,6 +1103,10 @@ async function load({ keepPlace = false } = {}) {
   document.title = `${S.order.title} · Family Preserves`;
   $('eyebrow').textContent = `Order ${S.order.code} · ${plural(S.photos.length, 'photo', 'photos')}`;
   $('title').textContent = S.order.title;
+  if (firstRender) {
+    firstRender = false;
+    S.welcome = !welcomeSeen();
+  }
   if (!S.photos.length) {
     $('main').innerHTML = '<p class="empty">Your photos are on their way. Please check back soon.</p>';
     renderSaveStatus();
