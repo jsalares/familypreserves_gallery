@@ -12,6 +12,9 @@ import { loadConfig } from '../server/config.js';
 import { createApp } from '../server/app.js';
 import { uploadOrder, findPhotos, scanOrder } from '../uploader/upload.js';
 import Database from 'better-sqlite3';
+import yauzl from 'yauzl';
+import { exiftool } from 'exiftool-vendored';
+import { orientationAfterTurn, tagsFor, safeName } from '../server/download.js';
 import { openDb, MIGRATIONS } from '../server/db.js';
 
 const ADMIN_TOKEN = 'test-admin-token-0123456789abcdef';
@@ -59,7 +62,8 @@ before(async () => {
 
 after(async () => {
   await new Promise((resolve) => server.close(resolve));
-  close();
+  await close();
+  await exiftool.end();
   fs.rmSync(tmp, { recursive: true, force: true });
 });
 
@@ -339,6 +343,116 @@ test('backs go with their fronts, and raw folders upload untouched', async () =>
   const kept = await load();
   assert.equal(kept.photos[0].rotation, 90);
   assert.equal(kept.photos[0].back.rotation, 270);
+});
+
+function unzip(buffer) {
+  return new Promise((resolve, reject) => {
+    yauzl.fromBuffer(buffer, { lazyEntries: true }, (err, zip) => {
+      if (err) return reject(err);
+      const files = new Map();
+      zip.on('entry', (entry) => {
+        zip.openReadStream(entry, (err2, stream) => {
+          if (err2) return reject(err2);
+          const chunks = [];
+          stream.on('data', (c) => chunks.push(c));
+          stream.on('end', () => {
+            files.set(entry.fileName, Buffer.concat(chunks));
+            zip.readEntry();
+          });
+        });
+      });
+      zip.on('end', () => resolve(files));
+      zip.on('error', reject);
+      zip.readEntry();
+    });
+  });
+}
+
+test('the zip download has enhanced photos with details, copies, and untouched raw scans', async () => {
+  const reset = await fetch(`${base}/api/admin/orders/FP-3000/reset-code`, { method: 'POST', headers: { authorization: `Bearer ${ADMIN_TOKEN}` } });
+  const { accessCode, order } = await reset.json();
+  const slug = order.url.split('/').pop();
+  const signIn = await fetch(`${base}/api/g/${slug}/sign-in`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ code: accessCode }),
+  });
+  const ck = signIn.headers.get('set-cookie').split(';')[0];
+  const data = await (await fetch(`${base}/api/g/${slug}/gallery`, { headers: { cookie: ck } })).json();
+  assert.deepEqual(data.raw, { files: 3, bytes: fs.statSync(path.join(tmp, 'FP-3000 Lee', 'Album 1', 'raw', 'scan1.tif')).size + 23 + 15 });
+  const [front, plain] = data.photos;
+  assert.ok(front.bytes > plain.bytes, 'a photo with a back counts both files');
+
+  await fetch(`${base}/api/g/${slug}/changes`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', cookie: ck },
+    body: JSON.stringify({
+      changes: [
+        { op: 'photo.folder', photoId: front.id, name: 'Christmas', on: true },
+        { op: 'photo.person', photoId: front.id, name: 'Grandma Rose', on: true },
+        { op: 'photo.field', photoId: front.id, field: 'year', value: 'about 1962' },
+        { op: 'photo.field', photoId: front.id, field: 'caption', value: 'Café on the lake' },
+        { op: 'photo.field', photoId: front.id, field: 'place', value: 'Lac Philippe' },
+        { op: 'photo.field', photoId: front.id, field: 'event', value: 'Summer trip' },
+      ],
+    }),
+  });
+
+  assert.equal((await fetch(`${base}/api/g/${slug}/download?raw=1`)).status, 401, 'needs the access code');
+  assert.equal((await fetch(`${base}/api/g/${slug}/download`, { headers: { cookie: ck } })).status, 400, 'nothing chosen');
+
+  const res = await fetch(`${base}/api/g/${slug}/download?raw=1&scanned=Album%201&custom=Christmas`, { headers: { cookie: ck } });
+  assert.equal(res.status, 200);
+  assert.match(res.headers.get('content-disposition'), /FP-3000%20Lee\.zip/);
+  const files = await unzip(Buffer.from(await res.arrayBuffer()));
+  const names = [...files.keys()].sort();
+  assert.deepEqual(names, [
+    'FP-3000 Lee/Enhanced/Album 1/scan1.jpg',
+    'FP-3000 Lee/Enhanced/Album 1/scan1_b.jpg',
+    'FP-3000 Lee/Enhanced/Album 1/scan2.jpg',
+    'FP-3000 Lee/Enhanced/Album 1/stray_b.jpg',
+    'FP-3000 Lee/My custom folders/Christmas/scan1.jpg',
+    'FP-3000 Lee/My custom folders/Christmas/scan1_b.jpg',
+    'FP-3000 Lee/Raw scans/Album 1/notes.xmp',
+    'FP-3000 Lee/Raw scans/Album 1/scan1.tif',
+    'FP-3000 Lee/Raw scans/Box/b.tif',
+  ]);
+  // Raw scans are byte for byte what was uploaded.
+  assert.equal(files.get('FP-3000 Lee/Raw scans/Album 1/scan1.tif').toString(), 'raw front bytes');
+
+  // The enhanced front carries the details and its turn (90 degrees -> orientation 6).
+  const out = path.join(tmp, 'check-front.jpg');
+  fs.writeFileSync(out, files.get('FP-3000 Lee/My custom folders/Christmas/scan1.jpg'));
+  const tags = await exiftool.read(out, ['-G1', '-n']);
+  const t = (name) => Object.entries(tags).find(([k]) => k === name || k.endsWith(`:${name}`))?.[1];
+  assert.equal(t('Orientation'), 6);
+  assert.equal(String(t('DateTimeOriginal')).slice(0, 4), '1962');
+  assert.equal(t('Description'), 'Café on the lake');
+  assert.equal(t('Location'), 'Lac Philippe');
+  assert.equal(t('Event'), 'Summer trip');
+  assert.deepEqual([t('PersonInImage')].flat(), ['Grandma Rose']);
+  assert.deepEqual([t('Subject')].flat().sort(), ['Christmas', 'Grandma Rose', 'Summer trip']);
+  // The back has its own turn (270 -> orientation 8).
+  fs.writeFileSync(out, files.get('FP-3000 Lee/Enhanced/Album 1/scan1_b.jpg'));
+  assert.equal((await exiftool.read(out, ['-n'])).Orientation, 8);
+  // A photo with nothing to add is left as uploaded.
+  fs.writeFileSync(out, files.get('FP-3000 Lee/Enhanced/Album 1/scan2.jpg'));
+  assert.equal((await exiftool.read(out, ['-n'])).Orientation, undefined);
+
+  // Only the raw scans.
+  const rawOnly = await unzip(Buffer.from(await (await fetch(`${base}/api/g/${slug}/download?raw=1`, { headers: { cookie: ck } })).arrayBuffer()));
+  assert.equal([...rawOnly.keys()].every((n) => n.startsWith('FP-3000 Lee/Raw scans/')), true);
+});
+
+test('download helpers: turns, tags and safe names', () => {
+  assert.equal(orientationAfterTurn(undefined, 90), 6);
+  assert.equal(orientationAfterTurn(6, 90), 3);
+  assert.equal(orientationAfterTurn(8, 90), 1);
+  assert.equal(orientationAfterTurn(2, 90), 2, 'mirrored is left alone');
+  const tags = tagsFor({ year: '1970s', caption: '', place: '', event: '', people: [], customFolders: [] });
+  assert.deepEqual(tags, {}, 'no exact year, nothing to write');
+  assert.equal(tagsFor({ year: 'Summer 1985', caption: '', place: '', event: '', people: [], customFolders: [] })['XMP-photoshop:DateCreated'], '1985');
+  assert.equal(safeName('Mom & Dad: 1980/81?'), 'Mom & Dad_ 1980_81_');
 });
 
 test('raw file paths cannot climb out of the order', async () => {

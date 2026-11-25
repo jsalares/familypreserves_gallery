@@ -4,6 +4,7 @@ import express from 'express';
 import { openDb, createQueries } from './db.js';
 import { createStorage, assertSafeKey } from './storage.js';
 import { createChangeHandler, loadOrganizing, MAX_CHANGES_PER_REQUEST, MAX_CUSTOM_FOLDERS } from './changes.js';
+import { planDownload, sendZip, closeExifTool } from './download.js';
 import {
   generateAccessCode,
   hashAccessCode,
@@ -309,6 +310,7 @@ export function createApp(config) {
         caption: p.caption || '',
         enhance: Boolean(p.enhance),
         rotation: p.rotation,
+        bytes: p.bytes + (p.back_bytes || 0),
       }))
     );
     const folders = q.sourceFolders.all(order.id).map((f) => ({
@@ -321,8 +323,35 @@ export function createApp(config) {
       customFolders: org.customFolders,
       people: org.people,
       maxCustomFolders: MAX_CUSTOM_FOLDERS,
+      raw: q.rawTotals.get(order.id),
       photos,
     });
+  });
+
+  // The zip download. ?raw=1&scanned=<folder>&custom=<folder> (repeatable)
+  // picks what goes in. Built while it downloads; see server/download.js.
+  app.get('/api/g/:slug/download', async (req, res) => {
+    const order = customerOrder(req, res);
+    if (!order) return;
+    const list = (v) => new Set((Array.isArray(v) ? v : v == null ? [] : [v]).map(String));
+    const parts = { raw: req.query.raw === '1', scanned: list(req.query.scanned), custom: list(req.query.custom) };
+    const org = loadOrganizing(db, order.id);
+    const photos = q.photosForOrder.all(order.id).map((p) => ({
+      ...p,
+      folder: p.source_folder,
+      customFolders: org.foldersByPhoto.get(p.id) || [],
+      people: org.peopleByPhoto.get(p.id) || [],
+      back: p.back_enhanced_key ? { filename: p.back_filename, enhanced_key: p.back_enhanced_key, rotation: p.back_rotation } : null,
+    }));
+    const plan = planDownload({ order, photos, rawFiles: parts.raw ? q.rawFilesForOrder.all(order.id) : [], parts });
+    if (!plan.items.length) return res.status(400).json({ error: 'Choose at least one folder to download.' });
+    const filename = `${plan.root}.zip`;
+    res.set({
+      'Content-Type': 'application/zip',
+      'Content-Disposition': `attachment; filename="${filename.replace(/[^\x20-\x7e]|"/g, '_')}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
+      'Cache-Control': 'no-store',
+    });
+    await sendZip({ res, storage, plan });
   });
 
   // A batch of customer edits, applied in order. See server/changes.js.
@@ -338,5 +367,13 @@ export function createApp(config) {
 
   app.use((req, res) => page(res, 'not-found.html', 404));
 
-  return { app, db, storage, close: () => db.close() };
+  return {
+    app,
+    db,
+    storage,
+    close: async () => {
+      await closeExifTool();
+      db.close();
+    },
+  };
 }

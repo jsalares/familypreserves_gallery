@@ -174,12 +174,15 @@ export function createQueries(db) {
       ON CONFLICT (order_id, path) DO UPDATE SET sha256 = excluded.sha256, bytes = excluded.bytes, key = excluded.key
     `),
     countRawFiles: db.prepare('SELECT COUNT(*) AS n FROM raw_files WHERE order_id = ?'),
+    rawFilesForOrder: db.prepare('SELECT * FROM raw_files WHERE order_id = ? ORDER BY path'),
+    rawTotals: db.prepare('SELECT COUNT(*) AS files, COALESCE(SUM(bytes), 0) AS bytes FROM raw_files WHERE order_id = ?'),
     photosInFolder: db.prepare('SELECT id, filename FROM photos WHERE source_folder_id = ?'),
     setPhotoPosition: db.prepare('UPDATE photos SET position = ? WHERE id = ?'),
     photosForOrder: db.prepare(`
       SELECT p.*, f.name AS source_folder,
              b.filename AS back_filename, b.width AS back_width, b.height AS back_height,
-             b.screen_key AS back_screen_key, b.thumb_key AS back_thumb_key, b.rotation AS back_rotation
+             b.screen_key AS back_screen_key, b.thumb_key AS back_thumb_key, b.rotation AS back_rotation,
+             b.enhanced_key AS back_enhanced_key, b.bytes AS back_bytes
       FROM photos p JOIN source_folders f ON f.id = p.source_folder_id
       LEFT JOIN photo_backs b ON b.photo_id = p.id
       WHERE p.order_id = ?

@@ -15,6 +15,8 @@ const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ESC[c]);
 const collator = new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
 const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+const fmtBytes = (n) =>
+  n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n >= 1e6 ? `${Math.max(1, Math.round(n / 1e6))} MB` : `${Math.max(1, Math.round(n / 1e3))} KB`;
 
 const ICON = {
   check: (s = 14) => `<svg width="${s}" height="${s}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"/></svg>`,
@@ -48,6 +50,8 @@ const S = {
   barOpen: true,
   confirmDelete: false,
   zoom: null, // { id, side } when one side of a two-sided photo is shown on its own
+  raw: { files: 0, bytes: 0 },
+  dl: null, // the download screen: { scanned: Set, custom: Set, raw, started }
   folderDraft: '',
 };
 
@@ -447,6 +451,8 @@ function chip(cls, act, label, count, pressed, extra = '') {
 }
 
 function renderShelves() {
+  $('shelves').hidden = Boolean(S.dl);
+  if (S.dl) return;
   const filed = S.photos.filter((p) => p.customFolders.length).length;
   const unfiled = S.photos.length - filed;
   const pct = S.photos.length ? Math.round((filed / S.photos.length) * 100) : 0;
@@ -669,7 +675,102 @@ function renderViewer(list) {
     </nav>`;
 }
 
+// ------------------------------------------------------------ download screen
+
+function openDownload() {
+  S.dl = {
+    scanned: new Set(S.sources.map((f) => f.name)),
+    custom: new Set(S.custom),
+    raw: S.raw.files > 0,
+    started: false,
+  };
+}
+
+function downloadTotals() {
+  const sum = (list) => list.reduce((t, p) => t + (p.bytes || 0), 0);
+  let bytes = 0;
+  let photos = 0;
+  for (const name of S.dl.scanned) {
+    const list = S.photos.filter((p) => p.folder === name);
+    bytes += sum(list);
+    photos += list.length;
+  }
+  for (const name of S.dl.custom) {
+    const list = S.photos.filter((p) => inFolder(p, name));
+    bytes += sum(list);
+    photos += list.length;
+  }
+  if (S.dl.raw) bytes += S.raw.bytes;
+  return { bytes, photos, any: photos > 0 || (S.dl.raw && S.raw.files > 0) };
+}
+
+function renderDownload() {
+  const d = S.dl;
+  const sizeOf = (list) => fmtBytes(list.reduce((t, p) => t + (p.bytes || 0), 0));
+  const box = (kind, name, label, on, extra) => `<button type="button" class="box" data-act="dl-toggle" data-kind="${kind}" ${name != null ? `data-name="${esc(name)}"` : ''} aria-pressed="${on}">
+      <span class="tick">${on ? ICON.check(12) : ''}</span><span class="label">${esc(label)}</span><span class="size">${extra}</span></button>`;
+  const scanned = S.sources
+    .map((f) => {
+      const list = S.photos.filter((p) => p.folder === f.name);
+      return box('scanned', f.name, f.name, d.scanned.has(f.name), `${list.length} · ${sizeOf(list)}`);
+    })
+    .join('');
+  const custom = S.custom
+    .map((name) => {
+      const list = S.photos.filter((p) => inFolder(p, name));
+      return box('custom', name, name, d.custom.has(name), `${list.length} · ${sizeOf(list)}`);
+    })
+    .join('');
+  const t = downloadTotals();
+  return `<section class="download" aria-labelledby="dl-title">
+      <h2 id="dl-title" class="serif">Download your photos</h2>
+      <p class="lead">Choose what to include. Everything comes in one zip file. The year, place, event, people and caption you added are written into each enhanced photo, so other photo apps can show and search them.</p>
+      <fieldset><legend>Enhanced photos, by scanned folder</legend><div class="boxes">${scanned}</div></fieldset>
+      ${custom ? `<fieldset><legend>Your custom folders</legend><div class="boxes">${custom}</div></fieldset>` : ''}
+      ${
+        S.raw.files
+          ? `<fieldset><legend>Raw scans</legend><div class="boxes">${box('raw', null, 'Raw scans, exactly as scanned', d.raw, `${plural(S.raw.files, 'file', 'files')} · ${fmtBytes(S.raw.bytes)}`).replace('class="box"', 'class="box box-wide"')}</div></fieldset>`
+          : ''
+      }
+      <div class="row">
+        <button type="button" class="btn" data-act="dl-start" ${t.any ? '' : 'disabled'}>Download zip</button>
+        <span class="total">${t.any ? `About ${fmtBytes(t.bytes)}` : 'Choose at least one folder'}</span>
+      </div>
+      ${
+        d.started
+          ? '<p class="started" role="status">Your download has started. Your browser shows its progress. A large download can take a while, so keep this window open until it finishes.</p>'
+          : '<p class="note">Large downloads are best on a computer with a good internet connection.</p>'
+      }
+    </section>`;
+}
+
+async function startDownload() {
+  if (saver.pending()) {
+    await saver.flush();
+    if (saver.pending()) {
+      showNotice("Some of your latest changes aren't saved yet, so they won't be in this download. Check your internet connection and try again.");
+      return;
+    }
+  }
+  const qs = new URLSearchParams();
+  if (S.dl.raw) qs.append('raw', '1');
+  for (const n of S.dl.scanned) qs.append('scanned', n);
+  for (const n of S.dl.custom) qs.append('custom', n);
+  const a = document.createElement('a');
+  a.href = `${api('/download')}?${qs}`;
+  a.download = '';
+  document.body.append(a);
+  a.click();
+  a.remove();
+  S.dl.started = true;
+  render();
+}
+
 function renderMain() {
+  if (S.dl) {
+    $('main').innerHTML = renderDownload();
+    return;
+  }
   const list = visiblePhotos();
   const empty =
     S.onlyUnfiled && S.view.kind !== 'folder'
@@ -719,6 +820,7 @@ let lastOpenId = null;
 // sideways scroll, focus stays on the same control, and only a change of
 // photo slides the filmstrip (never the page) to the current thumbnail.
 function render() {
+  renderDownloadButton();
   const strip = document.querySelector('.filmstrip');
   const stripLeft = strip ? strip.scrollLeft : 0;
   const key = focusKey();
@@ -770,6 +872,17 @@ document.addEventListener('click', (e) => {
     case 'enhance': toggleEnhance(photo); break;
     case 'zoom-side': S.zoom = S.zoom?.id === photo.id ? null : { id: photo.id, side: t.dataset.side }; break;
     case 'rotate': rotate(photo, t.dataset.side, Number(t.dataset.dir)); break;
+    case 'dl-toggle': {
+      const k = t.dataset.kind;
+      if (k === 'raw') S.dl.raw = !S.dl.raw;
+      else {
+        const set = k === 'scanned' ? S.dl.scanned : S.dl.custom;
+        if (set.has(name)) set.delete(name);
+        else set.add(name);
+      }
+      break;
+    }
+    case 'dl-start': startDownload(); return;
     case 'ask-delete': S.confirmDelete = true; break;
     case 'cancel-delete': S.confirmDelete = false; break;
     case 'delete-folder': deleteFolder(S.view.name); break;
@@ -844,6 +957,19 @@ function setHelp(open) {
 }
 $('help-btn').addEventListener('click', () => setHelp($('help-pop').hidden));
 $('undo').addEventListener('click', undo);
+$('download-btn').addEventListener('click', () => {
+  if (S.dl) S.dl = null;
+  else openDownload();
+  window.scrollTo({ top: 0 });
+  render();
+});
+
+function renderDownloadButton() {
+  const btn = $('download-btn');
+  btn.hidden = !S.photos.length;
+  btn.setAttribute('aria-expanded', String(Boolean(S.dl)));
+  btn.querySelector('span').textContent = S.dl ? 'Back to photos' : 'Download';
+}
 $('help-close').addEventListener('click', () => setHelp(false));
 document.addEventListener('keydown', (e) => e.key === 'Escape' && setHelp(false));
 
@@ -871,6 +997,7 @@ async function load({ keepPlace = false } = {}) {
   S.people = data.people;
   S.maxCustom = data.maxCustomFolders;
   S.photos = data.photos;
+  S.raw = data.raw || { files: 0, bytes: 0 };
   byId.clear();
   for (const p of S.photos) byId.set(p.id, p);
   // Changes not yet on the server (from this visit, or kept on this device

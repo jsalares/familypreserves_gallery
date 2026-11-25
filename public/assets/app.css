@@ -114,6 +114,8 @@ a { color: var(--green-700); }
 
 .intro { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; padding-top: 28px; padding-bottom: 12px; }
 .intro .title { margin: 0; }
+.intro-actions { display: flex; align-items: center; gap: 12px; flex: none; }
+.btn-download { display: inline-flex; align-items: center; gap: 8px; }
 .help { position: relative; flex: none; }
 .help-btn { width: 44px; height: 44px; border-radius: 22px; border: 2px solid var(--green-700); background: transparent; color: var(--green-900); font-size: 24px; line-height: 1; cursor: pointer; }
 .help-btn[aria-expanded="true"] { background: var(--green-900); color: var(--cream); }
@@ -263,4 +265,21 @@ button.side:focus-visible { outline: 3px solid var(--tan); outline-offset: -3px;
   .shelf-label { width: 100%; }
   .intro .title { font-size: 30px; }
   .stage-frame { height: 55vh; }
+}
+
+/* Download screen */
+.download { max-width: 760px; display: flex; flex-direction: column; gap: 18px; padding: 8px 0 40px; }
+.download h2 { margin: 0; font-size: 30px; color: var(--green-900); }
+.download .lead { margin: 0; color: var(--muted); font-size: 16px; }
+.download fieldset { margin: 0; padding: 0; border: 0; display: flex; flex-direction: column; gap: 8px; }
+.download legend { padding: 0 0 8px; font-size: 13px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--brown); font-weight: 700; }
+.download .boxes { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+.download .box .size { margin-left: auto; flex: none; color: var(--muted); font-size: 13px; }
+.download .box-wide { grid-column: 1 / -1; }
+.download .row { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
+.download .total { font-weight: 700; color: var(--green-900); }
+.download .note { margin: 0; font-size: 14px; color: var(--muted); }
+.download .started { margin: 0; padding: 12px 14px; border-radius: 6px; background: var(--cream); border: 1px solid var(--line-strong); }
+@media (max-width: 700px) {
+  .btn-download[aria-expanded="false"] span { display: none; }
 }
