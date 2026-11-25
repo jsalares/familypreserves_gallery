@@ -283,3 +283,54 @@ button.side:focus-visible { outline: 3px solid var(--tan); outline-offset: -3px;
 @media (max-width: 700px) {
   .btn-download[aria-expanded="false"] span { display: none; }
 }
+
+/* Welcome screen */
+.welcome { max-width: 760px; display: flex; flex-direction: column; gap: 20px; padding: 8px 0 48px; }
+/* Welcome collage: a fan of real prints from the order. */
+.collage { display: flex; justify-content: center; align-items: center; padding: 26px 20px 18px; min-height: 220px; overflow: hidden; overflow: clip; overflow-clip-margin: 24px; }
+.collage .print { --rot: 0deg; --lift: 0px; flex: 0 1 150px; min-width: 0; margin-left: -26px; padding: 8px 8px 26px; background: #fff; border-radius: 2px; box-shadow: 0 10px 24px rgba(20, 36, 30, 0.22), 0 2px 5px rgba(20, 36, 30, 0.12); transform: translateY(var(--lift)) rotate(var(--rot)); transition: transform 0.25s ease; animation: print-in 0.7s cubic-bezier(0.2, 0.8, 0.25, 1.15) both; }
+.collage .print:first-child { margin-left: 0; }
+.collage .print:hover { transform: translateY(calc(var(--lift) - 10px)) rotate(0deg) scale(1.06); z-index: 2; }
+.collage .print:nth-child(1) { --rot: -9deg; --lift: 14px; animation-delay: 0.05s; }
+.collage .print:nth-child(2) { --rot: 5deg; --lift: -6px; animation-delay: 0.15s; }
+.collage .print:nth-child(3) { --rot: -4deg; --lift: 10px; animation-delay: 0.25s; }
+.collage .print:nth-child(4) { --rot: 3deg; --lift: -12px; animation-delay: 0.35s; z-index: 1; }
+.collage .print:nth-child(5) { --rot: -6deg; --lift: 8px; animation-delay: 0.45s; }
+.collage .print:nth-child(6) { --rot: 7deg; --lift: -4px; animation-delay: 0.55s; }
+.collage .print:nth-child(7) { --rot: -3deg; --lift: 12px; animation-delay: 0.65s; }
+.print-img { position: relative; display: block; aspect-ratio: 4 / 3; overflow: hidden; background: var(--line); container-type: size; }
+.print-img img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.print-img img.r180 { transform: rotate(180deg); }
+.print-img img.r90, .print-img img.r270 { position: absolute; left: 50%; top: 50%; width: 100cqh; height: 100cqw; }
+.print-img img.r90 { transform: translate(-50%, -50%) rotate(90deg); }
+.print-img img.r270 { transform: translate(-50%, -50%) rotate(-90deg); }
+@keyframes print-in { from { opacity: 0; transform: translateY(40px) rotate(0deg) scale(0.9); } }
+@media (prefers-reduced-motion: reduce) { .collage .print { animation: none; transition: none; } }
+.welcome-thanks { text-align: center; padding: 6px 8px 4px; }
+.welcome .welcome-thanks .lead { max-width: 600px; margin: 12px auto 0; line-height: 1.55; }
+.welcome-thanks .signoff { margin: 14px 0 0; font-family: 'DM Serif Display', Georgia, serif; font-size: 19px; color: var(--brown); }
+.welcome-thanks .signoff::before { content: "— "; }
+.welcome-intro { margin: 8px 0 0; font-size: 17px; font-weight: 600; color: var(--green-900); }
+.welcome h2 { margin: 0; font-size: 34px; color: var(--green-900); }
+.welcome .lead { margin: 0; font-size: 18px; color: var(--ink); }
+.welcome-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.welcome-steps li { display: flex; gap: 16px; align-items: flex-start; padding: 18px 20px; background: var(--white); border: 1px solid var(--line); border-radius: 10px; }
+.welcome-steps .icon { flex: none; width: 52px; height: 52px; border-radius: 26px; display: inline-flex; align-items: center; justify-content: center; background: var(--cream); color: var(--green-900); border: 1px solid var(--line-strong); }
+.welcome-steps h3 { margin: 2px 0 6px; font-size: 19px; color: var(--green-900); }
+.welcome-steps p { margin: 0 0 6px; font-size: 15px; line-height: 1.5; color: var(--ink); }
+.welcome-steps .optional { margin-left: 6px; padding: 1px 8px; border-radius: 10px; background: var(--tan); color: var(--green-900); font-size: 12px; font-weight: 700; vertical-align: middle; }
+.welcome-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.welcome-actions .btn { min-width: 200px; font-size: 17px; }
+.btn-outline { background: transparent; color: var(--green-900); border: 2px solid var(--green-900); }
+.welcome .note { margin: 0; font-size: 14px; color: var(--muted); }
+.link-btn { padding: 0; border: 0; background: none; color: var(--green-700); font: inherit; font-weight: 600; text-decoration: underline; cursor: pointer; }
+@media (max-width: 700px) {
+  .welcome h2 { font-size: 26px; }
+  .collage { min-height: 140px; padding: 16px 12px 10px; }
+  .collage .print { flex-basis: 96px; margin-left: -18px; padding: 5px 5px 16px; }
+  .collage .print:first-child { margin-left: 0; }
+  .collage .print:nth-child(n+6) { display: none; }
+  .welcome-steps li { padding: 14px; gap: 12px; }
+  .welcome-steps .icon { width: 40px; height: 40px; }
+  .welcome-actions .btn { flex: 1 1 100%; }
+}
