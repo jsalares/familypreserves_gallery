@@ -89,24 +89,54 @@ function viewTitle() {
 }
 
 // ------------------------------------------------------------ saving changes
+//
+// Every change is written to this device (localStorage) before it is sent,
+// and only forgotten once the server has it. Closing the tab, losing signal
+// or a flat battery just means the changes go up on the next visit. Each
+// change states an end result, so sending one twice is harmless.
+
+const device = {
+  key: `fpg-pending:${slug}`,
+  ok: true, // false if this browser won't let us store anything
+  save(list) {
+    try {
+      if (list.length) localStorage.setItem(this.key, JSON.stringify(list));
+      else localStorage.removeItem(this.key);
+      this.ok = true;
+    } catch {
+      this.ok = false;
+    }
+  },
+  read() {
+    try {
+      const list = JSON.parse(localStorage.getItem(this.key) || '[]');
+      return Array.isArray(list) ? list.filter((x) => x && x.change && typeof x.change.op === 'string') : [];
+    } catch {
+      return [];
+    }
+  },
+};
 
 const saver = {
-  queue: [], // [{ key, change }]
-  sending: 0,
+  queue: [], // [{ key, change }] not yet sent
+  inflight: [], // sent, waiting for the server's answer
   failures: 0,
   timer: null,
   lastError: '',
 
+  persist() {
+    device.save([...this.inflight, ...this.queue]);
+  },
+
   add(change, key, delay = 400) {
     if (key) {
+      // Newest value wins. It moves to the end, so it still follows any
+      // folder change made before it.
       const i = this.queue.findIndex((q) => q.key === key);
-      if (i >= 0) {
-        this.queue[i].change = change; // newest value wins; still in its original place
-        this.later(delay);
-        return renderSaveStatus();
-      }
+      if (i >= 0) this.queue.splice(i, 1);
     }
     this.queue.push({ key, change });
+    this.persist();
     this.later(delay);
     renderSaveStatus();
   },
@@ -116,28 +146,29 @@ const saver = {
     this.timer = setTimeout(() => this.flush(), ms);
   },
 
-  async flush() {
-    if (this.sending || this.queue.length === 0) return;
-    const batch = this.queue.splice(0, 100);
-    this.sending = batch.length;
+  async flush({ keepalive = false } = {}) {
+    if (this.inflight.length || this.queue.length === 0) return;
+    this.inflight = this.queue.splice(0, 100);
     renderSaveStatus();
     try {
       const res = await fetch(api('/changes'), {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ changes: batch.map((b) => b.change) }),
+        body: JSON.stringify({ changes: this.inflight.map((b) => b.change) }),
+        keepalive,
       });
       if (res.status === 401) {
-        this.queue.unshift(...batch);
-        this.sending = 0;
-        this.lastError = 'You were signed out. Sign in again to keep saving.';
+        this.queue.unshift(...this.inflight);
+        this.inflight = [];
+        this.lastError = 'You were signed out. Sign in again to keep saving. Your changes are kept on this device.';
         renderSaveStatus();
         return;
       }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const { results } = await res.json();
       const refused = results.filter((r) => !r.ok);
-      this.sending = 0;
+      this.inflight = [];
+      this.persist();
       this.failures = 0;
       this.lastError = '';
       if (refused.length) {
@@ -147,8 +178,8 @@ const saver = {
         await load({ keepPlace: true });
       }
     } catch {
-      this.queue.unshift(...batch); // keep order; try again shortly
-      this.sending = 0;
+      this.queue.unshift(...this.inflight); // keep order; try again shortly
+      this.inflight = [];
       this.failures += 1;
       this.later(Math.min(30000, 1000 * 2 ** this.failures));
     }
@@ -157,7 +188,7 @@ const saver = {
   },
 
   pending() {
-    return this.queue.length + this.sending;
+    return this.queue.length + this.inflight.length;
   },
 };
 
@@ -165,13 +196,157 @@ window.addEventListener('online', () => {
   saver.failures = 0;
   saver.later(0);
 });
+// Leaving or hiding the page: send what we can right away.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') saver.flush({ keepalive: true });
+});
 window.addEventListener('beforeunload', (e) => {
-  if (saver.pending()) {
-    saver.flush();
+  // Changes are safe on this device, so only warn if it can't store them.
+  if (saver.pending() && !device.ok) {
+    saver.flush({ keepalive: true });
     e.preventDefault();
     e.returnValue = '';
   }
 });
+
+// --------------------------------------------------- applying changes locally
+
+// Applies a change to the screen's copy of the gallery, the same way the
+// server does. Used for every edit, for undo, and to put back changes that
+// were still waiting on this device from an earlier visit.
+function applyLocal(c) {
+  const photo = c.photoId != null ? byId.get(Number(c.photoId)) : null;
+  switch (c.op) {
+    case 'folder.create':
+      if (!S.custom.includes(c.name)) S.custom.push(c.name);
+      return;
+    case 'folder.delete':
+      S.custom = S.custom.filter((f) => f !== c.name);
+      for (const p of S.photos) p.customFolders = p.customFolders.filter((f) => f !== c.name);
+      if (S.view.kind === 'folder' && S.view.name === c.name) S.view = { kind: 'all' };
+      return;
+    case 'photo.folder':
+      if (!photo) return;
+      if (c.on) {
+        if (!S.custom.includes(c.name)) S.custom.push(c.name);
+        if (!photo.customFolders.includes(c.name)) {
+          photo.customFolders = S.custom.filter((f) => f === c.name || photo.customFolders.includes(f));
+        }
+      } else {
+        photo.customFolders = photo.customFolders.filter((f) => f !== c.name);
+      }
+      return;
+    case 'photo.person':
+      if (!photo) return;
+      if (c.on) {
+        if (!S.people.includes(c.name)) S.people = [...S.people, c.name].sort(collator.compare);
+        if (!photo.people.includes(c.name)) photo.people = [...photo.people, c.name].sort(collator.compare);
+      } else {
+        photo.people = photo.people.filter((n) => n !== c.name);
+      }
+      return;
+    case 'photo.field':
+      if (photo) photo[c.field] = c.value;
+      return;
+    case 'photo.enhance':
+      if (photo) photo.enhance = Boolean(c.on);
+      return;
+    case 'photo.rotate': {
+      const target = c.side === 'back' ? photo?.back : photo;
+      if (target) target.rotation = c.degrees;
+      return;
+    }
+  }
+}
+
+// The change(s) that would put things back the way they are right now.
+function inverseOf(c) {
+  const photo = c.photoId != null ? byId.get(Number(c.photoId)) : null;
+  switch (c.op) {
+    case 'folder.create':
+      return S.custom.includes(c.name) ? [] : [{ op: 'folder.delete', name: c.name }];
+    case 'folder.delete':
+      if (!S.custom.includes(c.name)) return [];
+      return [
+        { op: 'folder.create', name: c.name },
+        ...S.photos.filter((p) => inFolder(p, c.name)).map((p) => ({ op: 'photo.folder', photoId: p.id, name: c.name, on: true })),
+      ];
+    case 'photo.folder':
+      if (!photo) return [];
+      return [
+        ...(S.custom.includes(c.name) ? [] : [{ op: 'folder.delete', name: c.name }]),
+        { ...c, on: inFolder(photo, c.name) },
+      ].reverse();
+    case 'photo.person':
+      return photo ? [{ ...c, on: photo.people.includes(c.name) }] : [];
+    case 'photo.field':
+      return photo ? [{ ...c, value: photo[c.field] || '' }] : [];
+    case 'photo.enhance':
+      return photo ? [{ ...c, on: photo.enhance }] : [];
+    case 'photo.rotate': {
+      const target = c.side === 'back' ? photo?.back : photo;
+      return target ? [{ ...c, degrees: target.rotation }] : [];
+    }
+    default:
+      return [];
+  }
+}
+
+// Changes to the same thing replace each other in the queue.
+function changeKey(c) {
+  switch (c.op) {
+    case 'photo.folder': return `f:${c.photoId}:${c.name}`;
+    case 'photo.person': return `p:${c.photoId}:${c.name}`;
+    case 'photo.field': return `t:${c.photoId}:${c.field}`;
+    case 'photo.enhance': return `e:${c.photoId}`;
+    case 'photo.rotate': return `r:${c.photoId}:${c.side}`;
+    default: return undefined; // folder create/delete keep their order
+  }
+}
+
+const undoStack = []; // [{ label, changes, merge }]
+const UNDO_LIMIT = 50;
+
+// Makes an edit: shows it now, keeps it on the device, sends it, and
+// remembers how to undo it. Edits with the same `merge` in a row (typing in
+// one box) undo together.
+function act(label, changes, { merge = null, delay } = {}) {
+  const inverse = [];
+  for (const c of changes) {
+    inverse.unshift(...inverseOf(c));
+    applyLocal(c);
+    saver.add(c, changeKey(c), delay);
+  }
+  const top = undoStack[undoStack.length - 1];
+  if (merge && top && top.merge === merge) return renderUndo();
+  if (inverse.length) {
+    undoStack.push({ label, changes: inverse, merge });
+    if (undoStack.length > UNDO_LIMIT) undoStack.shift();
+  }
+  renderUndo();
+}
+
+function undo() {
+  const entry = undoStack.pop();
+  if (!entry) return;
+  for (const c of entry.changes) {
+    applyLocal(c);
+    saver.add(c, changeKey(c), 200);
+  }
+  showNotice(`Undone: ${entry.label}`);
+  render();
+  renderUndo();
+}
+
+function renderUndo() {
+  const btn = $('undo');
+  const top = undoStack[undoStack.length - 1];
+  btn.hidden = !top;
+  if (top) {
+    btn.title = `Undo: ${top.label}`;
+    btn.setAttribute('aria-label', `Undo: ${top.label}`);
+  }
+}
 
 function renderSaveStatus() {
   const el = $('save-status');
@@ -183,7 +358,9 @@ function renderSaveStatus() {
     text = esc(saver.lastError);
   } else if (n && (saver.failures || !navigator.onLine)) {
     state = 'offline';
-    text = `Not connected · ${plural(n, 'change', 'changes')} waiting to save`;
+    text = device.ok
+      ? `Offline · ${plural(n, 'change', 'changes')} kept on this device`
+      : `Not connected · ${plural(n, 'change', 'changes')} waiting to save`;
   } else if (n) {
     state = 'saving';
     text = `Saving… ${n} waiting`;
@@ -211,10 +388,7 @@ function toggleFolder(photo, name) {
     S.openId = photo.id;
     S.keepId = photo.id;
   }
-  photo.customFolders = on
-    ? S.custom.filter((f) => f === name || photo.customFolders.includes(f))
-    : photo.customFolders.filter((f) => f !== name);
-  saver.add({ op: 'photo.folder', photoId: photo.id, name, on }, `f:${photo.id}:${name}`);
+  act(on ? `copy to ${name}` : `remove from ${name}`, [{ op: 'photo.folder', photoId: photo.id, name, on }]);
 }
 
 function stepFrom(photo, dir) {
@@ -229,23 +403,19 @@ function addFolder(rawName) {
   if (!name) return;
   if (S.custom.some((f) => f.toLowerCase() === name.toLowerCase())) return showNotice(`You already have a folder called ${name}.`);
   if (S.custom.length >= S.maxCustom) return showNotice(`You can have up to ${S.maxCustom} custom folders.`);
-  S.custom.push(name);
   S.folderDraft = '';
-  saver.add({ op: 'folder.create', name });
+  act(`add folder ${name}`, [{ op: 'folder.create', name }]);
 }
 
 function deleteFolder(name) {
-  S.custom = S.custom.filter((f) => f !== name);
-  for (const p of S.photos) p.customFolders = p.customFolders.filter((f) => f !== name);
   S.view = { kind: 'all' };
   S.confirmDelete = false;
-  saver.add({ op: 'folder.delete', name });
+  act(`delete folder ${name}`, [{ op: 'folder.delete', name }]);
 }
 
 function togglePerson(photo, name) {
   const on = !photo.people.includes(name);
-  photo.people = on ? [...photo.people, name].sort(collator.compare) : photo.people.filter((n) => n !== name);
-  saver.add({ op: 'photo.person', photoId: photo.id, name, on }, `p:${photo.id}:${name}`);
+  act(on ? `tag ${name}` : `untag ${name}`, [{ op: 'photo.person', photoId: photo.id, name, on }]);
 }
 
 function addPerson(photo, rawName) {
@@ -253,25 +423,21 @@ function addPerson(photo, rawName) {
   if (!name) return;
   const existing = S.people.find((n) => n.toLowerCase() === name.toLowerCase());
   const final = existing || name;
-  if (!existing) S.people = [...S.people, name].sort(collator.compare);
   if (!photo.people.includes(final)) togglePerson(photo, final);
 }
 
 function setField(photo, field, value) {
-  photo[field] = value;
-  saver.add({ op: 'photo.field', photoId: photo.id, field, value }, `t:${photo.id}:${field}`, 900);
+  act(`edit ${field}`, [{ op: 'photo.field', photoId: photo.id, field, value }], { merge: `t:${photo.id}:${field}`, delay: 900 });
 }
 
 function rotate(photo, side, dir) {
   const target = side === 'back' ? photo.back : photo;
   if (!target) return;
-  target.rotation = (target.rotation + dir + 360) % 360;
-  saver.add({ op: 'photo.rotate', photoId: photo.id, side, degrees: target.rotation }, `r:${photo.id}:${side}`);
+  act(`turn the ${side}`, [{ op: 'photo.rotate', photoId: photo.id, side, degrees: (target.rotation + dir + 360) % 360 }]);
 }
 
 function toggleEnhance(photo) {
-  photo.enhance = !photo.enhance;
-  saver.add({ op: 'photo.enhance', photoId: photo.id, on: photo.enhance }, `e:${photo.id}`);
+  act(photo.enhance ? 'untick Restore' : 'tick Restore', [{ op: 'photo.enhance', photoId: photo.id, on: !photo.enhance }]);
 }
 
 // --------------------------------------------------------------- rendering
@@ -658,6 +824,13 @@ document.addEventListener('submit', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
+  // Ctrl+Z / Cmd+Z undoes the last edit, except while typing in a box
+  // (there the browser's own undo is more useful).
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && !e.target.closest('input, textarea')) {
+    e.preventDefault();
+    undo();
+    return;
+  }
   if (S.mode !== 'photo' || e.altKey || e.ctrlKey || e.metaKey) return;
   if (e.target.closest('input, textarea, select')) return;
   if (e.key === 'ArrowRight') move(1);
@@ -670,6 +843,7 @@ function setHelp(open) {
   $('help-btn').setAttribute('aria-expanded', String(open));
 }
 $('help-btn').addEventListener('click', () => setHelp($('help-pop').hidden));
+$('undo').addEventListener('click', undo);
 $('help-close').addEventListener('click', () => setHelp(false));
 document.addEventListener('keydown', (e) => e.key === 'Escape' && setHelp(false));
 
@@ -680,6 +854,8 @@ $('signout').addEventListener('click', async () => {
 });
 
 // ------------------------------------------------------------------- start
+
+let firstLoad = true;
 
 async function load({ keepPlace = false } = {}) {
   const res = await fetch(api('/gallery'));
@@ -697,6 +873,14 @@ async function load({ keepPlace = false } = {}) {
   S.photos = data.photos;
   byId.clear();
   for (const p of S.photos) byId.set(p.id, p);
+  // Changes not yet on the server (from this visit, or kept on this device
+  // from an earlier one) go back on screen and are sent.
+  if (firstLoad) {
+    firstLoad = false;
+    saver.queue = device.read();
+  }
+  for (const { change } of [...saver.inflight, ...saver.queue]) applyLocal(change);
+  if (saver.queue.length) saver.later(0);
   if (!keepPlace) S.openId = null;
   if (S.view.kind === 'folder' && !S.custom.includes(S.view.name)) S.view = { kind: 'all' };
   document.title = `${S.order.title} · Family Preserves`;
