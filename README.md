@@ -66,6 +66,30 @@ npm run upload -- "C:\Orders\FP-1042 Martin" --order FP-1042 --title "The Martin
 Lost the code, or need to cut off access? `npm run reset-code -- FP-1042`
 prints a new code; the old one stops working.
 
+## The admin page
+
+Open `https://gallery.familypreserves.ca/admin` and paste the `ADMIN_TOKEN`
+from the server's `.env` (the browser stays signed in for 12 hours). For each
+gallery you can:
+
+- see its photos, backs, raw files, size, custom folders, and how many photos
+  the customer marked **Restore**;
+- open it, copy its link, or give it a **new access code** (the old one stops
+  working);
+- set its **end date**, add 90 days, or remove the end date. A gallery is open
+  through its end date (Ottawa time) and shows "This gallery has closed" from
+  the next morning. Files are kept until you delete the gallery. New galleries
+  get an end date `GALLERY_DAYS` days out (90 unless set in `.env`; `0` means
+  no end date);
+- **delete one scanned folder** (for example one uploaded by mistake) or the
+  **whole gallery**, files included. Both ask you to type the order code.
+
+**Backups:** every night after 3 AM the server copies the database to R2 as
+`backups/gallery-YYYY-MM-DD.sqlite` and keeps the newest 30. The admin page
+shows the last one and has a **Back up now** button. To restore: stop the
+service, download a backup from the R2 dashboard, and put it in place of
+`data\gallery.sqlite`, then start the service.
+
 ## Trying it on your own PC
 
 ```
@@ -109,4 +133,5 @@ the upload tool, and sign in as a customer.
    ExifTool (year as the date taken, caption, place, event, people, folder
    names as tags) and their turn applied; raw scans are never touched.
    ExifTool comes with `npm install`; nothing extra to install on the server.
-5. Nightly database backup to R2, gallery expiry, small admin page.
+5. **Done:** admin page, gallery end dates, deleting, nightly database backup.
+   See "The admin page" above.

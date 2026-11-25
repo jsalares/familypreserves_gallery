@@ -2,7 +2,8 @@ import { loadConfig } from './config.js';
 import { createApp } from './app.js';
 
 const config = loadConfig();
-const { app, close } = createApp(config);
+const { app, close, backups } = createApp(config);
+backups.start(); // nightly database backup (see server/backup.js)
 
 const server = app.listen(config.port, config.host, () => {
   console.log(`Family Preserves gallery running at ${config.publicUrl} (listening on ${config.host}:${config.port}, storage: ${config.storage})`);

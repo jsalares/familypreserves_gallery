@@ -142,7 +142,7 @@ export function createQueries(db) {
     orderByCode: db.prepare('SELECT * FROM orders WHERE code = ?'),
     orderBySlug: db.prepare('SELECT * FROM orders WHERE slug = ?'),
     insertOrder: db.prepare(
-      'INSERT INTO orders (code, title, slug, access_hash) VALUES (@code, @title, @slug, @access_hash)'
+      'INSERT INTO orders (code, title, slug, access_hash, expires_at) VALUES (@code, @title, @slug, @access_hash, @expires_at)'
     ),
     setAccessHash: db.prepare('UPDATE orders SET access_hash = ? WHERE id = ?'),
     sourceFolder: db.prepare('SELECT * FROM source_folders WHERE order_id = ? AND name = ?'),

@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Admin · Family Preserves</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&amp;family=Source+Sans+3:wght@400;600;700&amp;display=swap">
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <img src="/assets/jar.png" alt="">
+    <div><span class="brand-name serif">Family Preserves</span><span class="brand-tag">Gallery admin</span></div>
+  </div>
+</header>
+<main>
+  <form class="signin" id="admin-signin" novalidate>
+    <h1 class="serif">Admin sign-in</h1>
+    <p>Paste the ADMIN_TOKEN from the server's .env file. This browser stays signed in for 12 hours.</p>
+    <label for="token">Admin token</label>
+    <input id="token" name="token" type="password" autocomplete="current-password" spellcheck="false" required>
+    <button class="btn" type="submit">Sign in</button>
+    <p class="message" id="message" role="alert"></p>
+  </form>
+</main>
+<script src="/assets/admin.js"></script>
+</body>
+</html>
