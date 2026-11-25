@@ -7,7 +7,9 @@
 // unique within an order, so the browser never has to wait for an id before
 // it can use a folder or person it just created.
 
-export const MAX_CUSTOM_FOLDERS = 8;
+// Customers can make as many folders as they like. This only stops a runaway
+// script from filling the database; no real gallery comes near it.
+export const MAX_CUSTOM_FOLDERS = 500;
 export const MAX_CHANGES_PER_REQUEST = 200;
 const TEXT_FIELDS = { year: 20, place: 100, event: 100, caption: 1000 };
 const NAME_MAX = 40;
