@@ -39,7 +39,9 @@ const S = {
   sources: [], // [{ name, count }]
   custom: [], // custom folder names, in order
   people: [], // every person the customer has added
-  maxCustom: 8,
+  maxCustom: 500, // the server's safety cap; customers never see it
+  menu: null, // the open folder dropdown: 'source', 'custom' or 'pick:<photo id>'
+  menuFilter: '',
   photos: [],
   view: { kind: 'all' }, // all | source | folder
   onlyUnfiled: false,
@@ -451,6 +453,56 @@ function chip(cls, act, label, count, pressed, extra = '') {
   return `<button type="button" class="chip ${cls}" data-act="${act}" ${extra} aria-pressed="${pressed}">${esc(label)} <span class="n">${count}</span></button>`;
 }
 
+// Past this many folders, a row of buttons becomes a dropdown list.
+const DROPDOWN_AFTER = 8;
+const useDropdown = (list) => list.length > DROPDOWN_AFTER;
+
+// A dropdown of folders. `rows` are { act, name, id?, on, count? }. With
+// `ticks` each row has a checkbox and the list stays open while you tick;
+// without, picking a row opens that folder and closes the list.
+function dropdown({ key, label, rows, ticks, wide = false }) {
+  const open = S.menu === key;
+  const q = S.menuFilter.trim().toLowerCase();
+  const list = rows
+    .map((r) => {
+      const hidden = q && !r.name.toLowerCase().includes(q) ? ' hidden' : '';
+      const id = r.id ? ` data-id="${r.id}"` : '';
+      const state = ticks ? `role="menuitemcheckbox" aria-checked="${r.on}"` : `role="menuitem"${r.on ? ' aria-current="true"' : ''}`;
+      return `<button type="button" class="dd-row" data-act="${r.act}"${id} data-name="${esc(r.name)}" ${state}${hidden}>
+          ${ticks ? `<span class="tick">${r.on ? ICON.check(12) : ''}</span>` : ''}<span class="label">${esc(r.name)}</span>${r.count != null ? `<span class="n">${r.count}</span>` : ''}</button>`;
+    })
+    .join('');
+  return `<div class="dd${open ? ' open' : ''}${wide ? ' dd-wide' : ''}">
+      <button type="button" class="dd-btn" data-act="dd" data-key="${key}" aria-expanded="${open}" aria-haspopup="true">${label} ${ICON.chevron}</button>
+      ${
+        open
+          ? `<div class="dd-menu" role="menu">
+              <input type="search" class="dd-filter" data-act="dd-filter" aria-label="Find a folder" placeholder="Find a folder" value="${esc(S.menuFilter)}">
+              <div class="dd-list">${list}</div>
+              <p class="dd-none"${rows.some((r) => !q || r.name.toLowerCase().includes(q)) ? ' hidden' : ''}>No folder by that name.</p>
+            </div>`
+          : ''
+      }
+    </div>`;
+}
+
+// The folder ticks for one photo: buttons, or a dropdown once there are many.
+function folderPicker(p, style) {
+  if (!useDropdown(S.custom)) return null;
+  const n = p.customFolders.length;
+  const label =
+    style === 'grid'
+      ? `<span>${n ? `In ${plural(n, 'folder', 'folders')}` : 'Add to folders'}</span>`
+      : `<span>${n ? `${n} ticked` : 'Choose folders'}</span>`;
+  return dropdown({
+    key: `pick:${p.id}`,
+    label,
+    ticks: true,
+    wide: style !== 'grid',
+    rows: S.custom.map((f) => ({ act: 'toggle-folder', id: p.id, name: f, on: inFolder(p, f) })),
+  });
+}
+
 function renderShelves() {
   $('shelves').hidden = Boolean(S.dl || S.welcome);
   if (S.dl || S.welcome) return;
@@ -471,20 +523,41 @@ function renderShelves() {
       <div class="shelf" role="group" aria-label="Scanned folders">
         <span class="shelf-label">Scanned folders</span>
         ${chip('chip-source', 'view-all', 'All', S.photos.length, v.kind === 'all')}
-        ${S.sources
-          .map((f) => chip('chip-source', 'view-source', f.name, f.count, v.kind === 'source' && v.name === f.name, `data-name="${esc(f.name)}"`))
-          .join('')}
+        ${
+          useDropdown(S.sources)
+            ? dropdown({
+                key: 'source',
+                label: v.kind === 'source' ? `<span class="dd-current">${esc(v.name)}</span>` : `<span>Choose a folder</span> <span class="n">${S.sources.length}</span>`,
+                rows: S.sources.map((f) => ({ act: 'view-source', name: f.name, count: f.count, on: v.kind === 'source' && v.name === f.name })),
+              })
+            : S.sources
+                .map((f) => chip('chip-source', 'view-source', f.name, f.count, v.kind === 'source' && v.name === f.name, `data-name="${esc(f.name)}"`))
+                .join('')
+        }
         <button type="button" class="switch" role="switch" data-act="only-unfiled" aria-checked="${S.onlyUnfiled}">
           <span class="switch-track"></span> Only show photos not in a custom folder <span class="left">(${unfiled} left)</span>
         </button>
       </div>
       <div class="shelf" role="group" aria-label="Your custom folders">
         <span class="shelf-label">Your custom folders</span>
-        ${S.custom
-          .map((name) =>
-            chip('chip-custom', 'view-folder', name, S.photos.filter((p) => inFolder(p, name)).length, v.kind === 'folder' && v.name === name, `data-name="${esc(name)}"`)
-          )
-          .join('')}
+        ${
+          useDropdown(S.custom)
+            ? dropdown({
+                key: 'custom',
+                label: v.kind === 'folder' ? `<span class="dd-current">${esc(v.name)}</span>` : `<span>Choose a folder</span> <span class="n">${S.custom.length}</span>`,
+                rows: S.custom.map((name) => ({
+                  act: 'view-folder',
+                  name,
+                  count: S.photos.filter((p) => inFolder(p, name)).length,
+                  on: v.kind === 'folder' && v.name === name,
+                })),
+              })
+            : S.custom
+                .map((name) =>
+                  chip('chip-custom', 'view-folder', name, S.photos.filter((p) => inFolder(p, name)).length, v.kind === 'folder' && v.name === name, `data-name="${esc(name)}"`)
+                )
+                .join('')
+        }
         ${
           S.custom.length < S.maxCustom
             ? `<form class="add-folder" data-form="add-folder">
@@ -552,12 +625,15 @@ function renderGrid(list) {
         <figcaption>
           <div class="summary">${esc(summary(p))}</div>
           <div class="pills" role="group" aria-label="Copy ${esc(p.filename)} to a custom folder">
-            ${S.custom
-              .map((f) => {
-                const on = inFolder(p, f);
-                return `<button type="button" class="pill" data-act="toggle-folder" data-id="${p.id}" data-name="${esc(f)}" aria-pressed="${on}">${on ? ICON.check(12) : ''}${esc(f)}</button>`;
-              })
-              .join('')}
+            ${
+              folderPicker(p, 'grid') ??
+              S.custom
+                .map((f) => {
+                  const on = inFolder(p, f);
+                  return `<button type="button" class="pill" data-act="toggle-folder" data-id="${p.id}" data-name="${esc(f)}" aria-pressed="${on}">${on ? ICON.check(12) : ''}${esc(f)}</button>`;
+                })
+                .join('')
+            }
           </div>
         </figcaption>
       </figure>`
@@ -619,7 +695,15 @@ function renderViewer(list) {
         <section>
           <h3>Copy to custom folders</h3>
           ${
-            S.custom.length
+            useDropdown(S.custom)
+              ? `${folderPicker(p, 'viewer')}${
+                  p.customFolders.length
+                    ? `<div class="pills ticked">${p.customFolders
+                        .map((f) => `<button type="button" class="pill" data-act="toggle-folder" data-id="${p.id}" data-name="${esc(f)}" aria-pressed="true" aria-label="Take out of ${esc(f)}">${ICON.check(12)}${esc(f)} ${ICON.x}</button>`)
+                        .join('')}</div>`
+                    : ''
+                }`
+              : S.custom.length
               ? `<div class="boxes">${S.custom
                   .map((f) => {
                     const on = inFolder(p, f);
@@ -830,7 +914,7 @@ function renderWelcome() {
         <li>
           <span class="icon">${WELCOME_ICON.sort}</span>
           <div><h3>Organize them your way <span class="optional">optional</span></h3>
-          <p>Make up to ${S.maxCustom} custom folders, like “Christmas” or “Grandma's house”, and copy photos into them. Add the year, place, event and who's in each photo so they're easy to find later. Everything saves as you go.</p>
+          <p>Make as many custom folders as you like, such as “Christmas” or “Grandma's house”, and copy photos into them. Add the year, place, event and who's in each photo so they're easy to find later. Everything saves as you go.</p>
           <p>See one that's torn, stained or faded? Tick <strong>Restore this photo</strong> and we'll send you a quote.</p></div>
         </li>
         <li>
@@ -897,6 +981,7 @@ function focusKey() {
   if (d.name) sel += `[data-name="${CSS.escape(d.name)}"]`;
   if (d.side) sel += `[data-side="${d.side}"]`;
   if (d.dir) sel += `[data-dir="${d.dir}"]`;
+  if (d.key) sel += `[data-key="${d.key}"]`;
   return sel;
 }
 
@@ -928,16 +1013,28 @@ function render() {
 // ------------------------------------------------------------------ events
 
 document.addEventListener('click', (e) => {
+  // A click anywhere outside an open dropdown closes it.
+  if (S.menu && !e.target.closest('.dd')) {
+    S.menu = null;
+    if (!e.target.closest('[data-act]')) return render();
+  }
   const t = e.target.closest('[data-act]');
-  if (!t || t.tagName === 'SELECT') return;
+  if (!t || t.tagName === 'SELECT' || t.tagName === 'INPUT') return;
   const photo = t.dataset.id ? byId.get(Number(t.dataset.id)) : null;
   const name = t.dataset.name;
   const go = (view) => {
     S.view = view;
     S.openId = null;
     S.confirmDelete = false;
+    S.menu = null;
   };
   switch (t.dataset.act) {
+    case 'dd':
+      S.menu = S.menu === t.dataset.key ? null : t.dataset.key;
+      S.menuFilter = '';
+      render();
+      if (S.menu && !matchMedia('(pointer: coarse)').matches) document.querySelector('.dd.open .dd-filter')?.focus({ preventScroll: true });
+      return;
     case 'toggle-bar': S.barOpen = !S.barOpen; break;
     case 'view-all': go({ kind: 'all' }); break;
     case 'view-source': go({ kind: 'source', name }); break;
@@ -986,6 +1083,7 @@ function move(dir) {
   let i = list.findIndex((p) => p.id === S.openId);
   if (i < 0) i = 0;
   S.openId = list[(i + dir + list.length) % list.length].id;
+  S.menu = null;
   render();
 }
 
@@ -1005,6 +1103,17 @@ document.addEventListener('input', (e) => {
     setField(photo, field, e.target.value);
   } else if (e.target.closest('[data-form="add-folder"]')) {
     S.folderDraft = e.target.value;
+  } else if (e.target.matches('.dd-filter')) {
+    // Filter the open list in place, so typing never loses its place.
+    S.menuFilter = e.target.value;
+    const q = S.menuFilter.trim().toLowerCase();
+    const menu = e.target.closest('.dd-menu');
+    let any = false;
+    for (const row of menu.querySelectorAll('.dd-row')) {
+      row.hidden = Boolean(q) && !row.dataset.name.toLowerCase().includes(q);
+      any ||= !row.hidden;
+    }
+    menu.querySelector('.dd-none').hidden = any;
   }
 });
 
@@ -1026,6 +1135,13 @@ document.addEventListener('submit', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && S.menu) {
+    const key = S.menu;
+    S.menu = null;
+    render();
+    document.querySelector(`[data-act="dd"][data-key="${key}"]`)?.focus({ preventScroll: true });
+    return;
+  }
   // Ctrl+Z / Cmd+Z undoes the last edit, except while typing in a box
   // (there the browser's own undo is more useful).
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'z' && !e.target.closest('input, textarea')) {

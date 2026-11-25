@@ -215,13 +215,11 @@ test('customers can sort photos into custom folders and add details', async () =
   assert.deepEqual(later.photos.find((p) => p.id === a).customFolders, []);
 });
 
-test('custom folders stop at eight, and other galleries are off limits', async () => {
-  const names = Array.from({ length: 9 }, (_, i) => `Folder ${i + 1}`);
+test('custom folders have no practical limit, and other galleries are off limits', async () => {
+  const names = Array.from({ length: 20 }, (_, i) => `Folder ${i + 1}`);
   const { results } = await (await send(names.map((name) => ({ op: 'folder.create', name })))).json();
-  // "Cottage" already exists, so seven more fit.
-  assert.deepEqual(results.map((r) => r.ok), [true, true, true, true, true, true, true, false, false]);
-  assert.match(results[7].error, /up to 8/);
-  assert.equal((await gallery()).customFolders.length, 8);
+  assert.ok(results.every((r) => r.ok));
+  assert.equal((await gallery()).customFolders.length, 21); // plus "Cottage"
 
   const tooMany = await send(Array.from({ length: 201 }, () => ({ op: 'folder.create', name: 'x' })));
   assert.equal(tooMany.status, 400);
